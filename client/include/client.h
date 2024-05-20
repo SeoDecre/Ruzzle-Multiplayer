@@ -11,6 +11,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <stdbool.h>
 #include <sys/select.h>
@@ -34,12 +35,14 @@ typedef struct {
     char* payload;    // n byte
 } Message;
 
+// Structure to hold thread arguments
 typedef struct {
-    char* clientInput;
     int clientFd;
-    char* serviceMsg;
+    char* clientInput;
+    char* serviceReturnMsg;
     Cell (*matrix)[MATRIX_SIZE];
     int* score;
+    int* timeLeft;
 } ThreadParams;
 
 /*
@@ -47,8 +50,8 @@ Main client loop function.
 Starts a loop which simulates a shell through which the client can communicate with the server.
 */
 void client(int port);
-void handleReceivedMessage(int clientFd, Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* serviceReturnMsg, int* score);
-void sendMessage(char* userInput, int clientFd, char* serviceReturnMsg);
+// void handleReceivedMessage(int clientFd, Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* serviceReturnMsg, int* score, int* timeLeft);
+// void sendMessage(char* userInput, int clientFd, char* serviceReturnMsg);
 int serializeMessage(const Message* msg, char* buffer);
 Message parseMessage(char* buffer);
 

@@ -21,6 +21,12 @@ void switchState(int signum) {
     alarm(30);
 }
 
+unsigned int getRemainingTime() {
+    unsigned int remainingTime = alarm(0); // Cancel the current alarm and get the remaining time
+    alarm(remainingTime); // Reset the alarm with the remaining time
+    return remainingTime;
+}
+
 int serializeMessage(const Message* msg, char* buffer) {
     int totalSize = sizeof(char) + sizeof(int) + msg->size;
 
@@ -115,6 +121,12 @@ void *handleClient(void *arg) {
                 }
                 responseMsg.type == MSG_OK ? printf(GREEN("%s\n"), responseMsg.payload) : printf(RED("%s\n"), responseMsg.payload);
                 printPlayerList(params->playersList);
+
+                // Sending response to client
+                responseMsg.size = strlen(responseMsg.payload);
+                sendMessageToClient(responseMsg, params->player->fd);
+
+                free(responseMsg.payload);
                 break;
             case MSG_MATRICE:
                 if (isPlayerAlreadyRegistered(params->playersList, params->player->fd)) {
@@ -124,6 +136,26 @@ void *handleClient(void *arg) {
                     responseMsg.type = MSG_ERR;
                     strcpy(responseMsg.payload, "You're not registered yet");
                 }
+                
+                // Sending word response to client
+                responseMsg.size = strlen(responseMsg.payload);
+                sendMessageToClient(responseMsg, params->player->fd);
+
+                free(responseMsg.payload);
+                // sleep(2);
+
+                // Also sending time left to client
+                responseMsg.type = currentState == GAME_STATE ? MSG_TEMPO_PARTITA : MSG_TEMPO_ATTESA;
+                char timeLeftString[10];
+                sprintf(timeLeftString, "%d", getRemainingTime());
+                // strcpy(responseMsg.payload, timeLeftString);
+                responseMsg.payload = strdup(timeLeftString);
+                responseMsg.size = strlen(responseMsg.payload);
+
+                // Sending second message
+                sendMessageToClient(responseMsg, params->player->fd);
+
+                free(responseMsg.payload);
                 break;
             case MSG_PAROLA:
                 if (isPlayerAlreadyRegistered(params->playersList, params->player->fd)) {
@@ -150,16 +182,17 @@ void *handleClient(void *arg) {
                     responseMsg.type = MSG_ERR;
                     strcpy(responseMsg.payload, "You're not registered yet");
                 }
+
+
+                // Sending response to client
+                responseMsg.size = strlen(responseMsg.payload);
+                sendMessageToClient(responseMsg, params->player->fd);
+
+                free(responseMsg.payload);
                 break;
             default:
                 break;
         }
-
-        // Sending response to client
-        responseMsg.size = strlen(responseMsg.payload);
-        sendMessageToClient(responseMsg, params->player->fd);
-
-        free(responseMsg.payload);
     }
 
     printf("Client %s disconnected\n", params->player->name);

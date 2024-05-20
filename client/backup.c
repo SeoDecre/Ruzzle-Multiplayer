@@ -53,7 +53,14 @@ Message parseMessage(char* buffer) {
     return msg;
 }
 
-void sendMessage(char* clientInput, int clientFd, char* serviceReturnMsg) {
+
+// Modified sendMessage function to accept ThreadParams
+void* sendMessage(void* arg) {
+    ThreadParams* params = (ThreadParams*)arg;
+    char* clientInput = params->clientInput;
+    int clientFd = params->clientFd;
+    char* serviceReturnMsg = params->serviceReturnMsg;
+
     // Server write returned value
     int retvalue;
 
@@ -171,72 +178,60 @@ void sendMessage(char* clientInput, int clientFd, char* serviceReturnMsg) {
 	printf("FINITA\n");
 	free(command);
 	free(content);
+    
+    return NULL;
 }
 
-void handleReceivedMessage(int clientFd, Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* serviceReturnMsg, int* score, int* timeLeft) {
+// Modified handleReceivedMessage function to accept ThreadParams
+void* handleReceivedMessage(void* arg) {
+    ThreadParams* params = (ThreadParams*)arg;
+    int clientFd = params->clientFd;
+    Cell (*matrix)[MATRIX_SIZE] = params->matrix;
+    char* serviceReturnMsg = params->serviceReturnMsg;
+    int* score = params->score;
+    int* timeLeft = params->timeLeft;
+
     // Temporary buffer for receiving client data
     int retvalue;
     char* buffer = (char*)malloc(1024);
 
-    // Setting file descriptors and timeout for select
-    fd_set read_fds;
-    struct timeval timeout;
-    FD_ZERO(&read_fds);
-    FD_SET(clientFd, &read_fds);
-    timeout.tv_sec = 0; // seconds
-    timeout.tv_usec = 500; // microseconds
+    // Reading server response through file descriptor
+    SYSC(retvalue, read(clientFd, buffer, 1024), "nella read"); // Lettura sul fd client
 
-	// Since the read has a blocking behavior, we use a select to wait for data to be available on the file descriptor
-    int ready = select(clientFd + 1, &read_fds, NULL, NULL, &timeout);
+    // Parsing obtained buffer
+    printf("From server: ");
+    Message msg = parseMessage(buffer); // Also prints its content
 
-    // Checking for select errors
-	if (ready < 0) {
-        perror("select failed");
-        free(buffer);
-        exit(EXIT_FAILURE);
-    } else if (ready == 0) {
-        printf("Timeout occurred, no data available to read\n");
-        free(buffer);
-        return;
-    } else {
-        // Reading server response through file descriptor
-    	SYSC(retvalue, read(clientFd, buffer, 1024), "nella read"); // Lettura sul fd client
+    switch (msg.type) {
+        case MSG_MATRICE:
+            // Extract matrix from buffer
+            memcpy(matrix, msg.payload, msg.size); // TODO: Remember to change if doesn't work
+            break;
+        case MSG_PUNTI_PAROLA:
+            int wordPoints = atoi(msg.payload);
+            *score += wordPoints;
 
-        // Parsing obtained buffer
-	    printf("From server: ");
-    	Message msg = parseMessage(buffer); // Also prints its content
-
-	    switch (msg.type) {
-            case MSG_MATRICE:
-                // Extract matrix from buffer
-                memcpy(matrix, msg.payload, msg.size); // TODO: Remember to change if doesn't work
-                break;
-            case MSG_PUNTI_PAROLA:
-                int wordPoints = atoi(msg.payload);
-                *score += wordPoints;
-
-                char* infoMsg = (char*)malloc(20);
-                sprintf(infoMsg, (wordPoints > 0) ? GREEN("Nice! +%d") : RED("Invalid word"), wordPoints);
-                strcpy(serviceReturnMsg, infoMsg);
-                break;
-            case MSG_TEMPO_PARTITA:
-                *timeLeft = atoi(msg.payload);
-                char* infoMsg1 = (char*)malloc(20);
-                sprintf(infoMsg1, "In game: %d", *timeLeft);
-                strcpy(serviceReturnMsg, infoMsg1);
-                break;
-            case MSG_TEMPO_ATTESA:
-                *timeLeft = atoi(msg.payload);
-                char* infoMsg2 = (char*)malloc(20);
-                sprintf(infoMsg2, "Waiting: %d", *timeLeft);
-                strcpy(serviceReturnMsg, infoMsg2);
-                break;
-            default:
-                // Stampa della risposta del server
-                strcpy(serviceReturnMsg, msg.payload);
-                break;
-        }
-	}
+            char* infoMsg = (char*)malloc(20);
+            sprintf(infoMsg, (wordPoints > 0) ? GREEN("Nice! +%d") : RED("Invalid word"), wordPoints);
+            strcpy(serviceReturnMsg, infoMsg);
+            break;
+        case MSG_TEMPO_PARTITA:
+            *timeLeft = atoi(msg.payload);
+            char* infoMsg1 = (char*)malloc(20);
+            sprintf(infoMsg1, "In game: %d", *timeLeft);
+            strcpy(serviceReturnMsg, infoMsg1);
+            break;
+        case MSG_TEMPO_ATTESA:
+            *timeLeft = atoi(msg.payload);
+            char* infoMsg2 = (char*)malloc(20);
+            sprintf(infoMsg2, "Waiting: %d", *timeLeft);
+            strcpy(serviceReturnMsg, infoMsg2);
+            break;
+        default:
+            // Stampa della risposta del server
+            strcpy(serviceReturnMsg, msg.payload);
+            break;
+    }
 
     free(buffer);
 }
@@ -271,16 +266,36 @@ void client(int port) {
     // Connect
     SYSC(retvalue, connect(client_fd, (struct sockaddr *) &server_addr, sizeof(server_addr)), "nella connect");
 
+    // Set socket to non-blocking mode
+    // int flags = fcntl(client_fd, F_GETFL, 0);
+    // if (flags == -1) printf("FLAG ERROR");
+    // fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+
     // Storing a connection info message so that it will displayed in the shell
     strcpy(serviceMsg, GREEN("Connected to the server"));
 
     // Initialization of the matrix to empty chars
     initMatrix(matrix);
 
+    // Thread parameters
+    ThreadParams params;
+    params.clientFd = client_fd;
+    params.clientInput = clientInput;
+    params.serviceReturnMsg = serviceMsg;
+    params.matrix = matrix;
+    params.score = &score;
+    params.timeLeft = &timeLeft;
+
+    pthread_t senderTid, receiverTid;
+
+    // Create threads for sending and receiving messages
+    pthread_create(&senderTid, NULL, sendMessage, (void *)&params);
+    pthread_create(&receiverTid, NULL, handleReceivedMessage, (void *)&params);
+
     while (1) {
         // Clear the screen and move cursor to top-left
-        printf("\033[2J"); // ANSI escape sequence to clear screen
-        printf("\033[H");  // ANSI escape sequence to move cursor to top-left
+        // printf("\033[2J"); // ANSI escape sequence to clear screen
+        // printf("\033[H");  // ANSI escape sequence to move cursor to top-left
 
         printf(YELLOW("Time left: %d\n"), timeLeft);
 
@@ -302,13 +317,9 @@ void client(int port) {
             return;
         }
 
-        // Sending client input to the server
-        // serviceMsg is passed so that the user can be eventually notified of client-side errors
-        sendMessage(clientInput, client_fd, serviceMsg);
-
-        // Receiving message from the server
-        // serviceMsg is passed so that the user can read server responses from the shell
-        handleReceivedMessage(client_fd, matrix, serviceMsg, &score, &timeLeft);
+        // Join threads
+        // pthread_join(senderTid, NULL);
+        // pthread_join(receiverTid, NULL);
     }
 
     // Freeing memory
