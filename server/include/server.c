@@ -1,10 +1,5 @@
 #include "server.h"
-#define RED(string) "\x1b[31m" string "\x1b[0m"
-#define GREEN(string) "\x1b[32m" string "\x1b[0m"
-#define YELLOW(string) "\x1b[33m" string "\x1b[0m"
-#define BLUE(string) "\x1b[34m" string "\x1b[0m"
-#define MAGENTA(string) "\x1b[35m" string "\x1b[0m"
-#define CYAN(string) "\x1b[36m" string "\x1b[0m"
+#include "colors.h"
 
 volatile ServerState currentState = WAITING_STATE;
 
@@ -142,7 +137,7 @@ void *handleClient(void *arg) {
                 sendMessageToClient(responseMsg, params->player->fd);
 
                 free(responseMsg.payload);
-                // sleep(2);
+                sleep(2);
 
                 // Also sending time left to client
                 responseMsg.type = currentState == GAME_STATE ? MSG_TEMPO_PARTITA : MSG_TEMPO_ATTESA;

@@ -40,19 +40,27 @@ typedef struct {
     int clientFd;
     char* clientInput;
     char* serviceReturnMsg;
-    Cell (*matrix)[MATRIX_SIZE];
     int* score;
     int* timeLeft;
+    Cell (*matrix)[MATRIX_SIZE];
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
 } ThreadParams;
+
 
 /*
 Main client loop function.
 Starts a loop which simulates a shell through which the client can communicate with the server.
 */
+// void handleCommand(ThreadParams* params, const char* command, const char* content);
+// void parseClientInput(const char* clientInput, char* command, char* content);
+// void clearScreen();
+// void displayInterface(const ThreadParams* params);
 void client(int port);
+
 // void handleReceivedMessage(int clientFd, Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* serviceReturnMsg, int* score, int* timeLeft);
 // void sendMessage(char* userInput, int clientFd, char* serviceReturnMsg);
-int serializeMessage(const Message* msg, char* buffer);
-Message parseMessage(char* buffer);
+// int serializeMessage(const Message* msg, char* buffer);
+// Message parseMessage(char* buffer);
 
 #endif /* CLIENT_H */
