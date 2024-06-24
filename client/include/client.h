@@ -17,6 +17,7 @@
 #include <sys/select.h>
 #include <time.h>
 #include "macros.h"
+#include "colors.h"
 #include "game_matrix.h"
 
 #define MSG_OK 'K'
@@ -47,20 +48,25 @@ typedef struct {
     pthread_cond_t cond;
 } ThreadParams;
 
+int serializeMessage(const Message* msg, char** buffer);
+
+Message parseMessage(const char* buffer);
+
+void processCommand(const char* command, const char* content, char* serviceReturnMsg, int clientFd, pthread_mutex_t* mutex);
+
+void* sendMessage(void* arg);
+
+void displayGameShell(ThreadParams* params);
+
+void processReceivedMessage(Message* msg, ThreadParams* params);
+
+void* handleReceivedMessage(void* arg);
 
 /*
-Main client loop function.
-Starts a loop which simulates a shell through which the client can communicate with the server.
+Main client function
+Creates a new thread to continuously listen to the server
+Uses the main thread to create a shell-alike terminal for user prompts
 */
-// void handleCommand(ThreadParams* params, const char* command, const char* content);
-// void parseClientInput(const char* clientInput, char* command, char* content);
-// void clearScreen();
-// void displayInterface(const ThreadParams* params);
 void client(int port);
-
-// void handleReceivedMessage(int clientFd, Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* serviceReturnMsg, int* score, int* timeLeft);
-// void sendMessage(char* userInput, int clientFd, char* serviceReturnMsg);
-// int serializeMessage(const Message* msg, char* buffer);
-// Message parseMessage(char* buffer);
 
 #endif /* CLIENT_H */

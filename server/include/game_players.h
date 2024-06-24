@@ -15,6 +15,9 @@ typedef struct {
     pthread_t tid;
     char name[MAX_NICKNAME_LENGTH];
     int score;
+    char** words;
+    int wordsCount;
+    int wordsCapacity;
 } Player;
 
 typedef struct {
@@ -32,6 +35,8 @@ int getPlayerScore(PlayerList* list, int playerFd);
 void updatePlayerNickname(PlayerList* list, int playerFd, char* newNickname);
 int isPlayerAlreadyRegistered(PlayerList* list, int playerFd);
 int nicknameAlreadyExists(PlayerList* list, char* nickname);
+int didUserAlreadyWroteWord(PlayerList* list, int playerFd, char* word);
+void addWordToPlayer(PlayerList* list, int playerFd, char* word);
 void freePlayerList(PlayerList* list);
 void printPlayerList(PlayerList* list);
 

@@ -1,10 +1,5 @@
 #include "game_players.h"
-#define RED(string) "\x1b[31m" string "\x1b[0m"
-#define GREEN(string) "\x1b[32m" string "\x1b[0m"
-#define YELLOW(string) "\x1b[33m" string "\x1b[0m"
-#define BLUE(string) "\x1b[34m" string "\x1b[0m"
-#define MAGENTA(string) "\x1b[35m" string "\x1b[0m"
-#define CYAN(string) "\x1b[36m" string "\x1b[0m"
+#include "colors.h"
 
 PlayerList* createPlayerList() {
     PlayerList* list = malloc(sizeof(PlayerList));
@@ -58,6 +53,9 @@ Player* addPlayer(PlayerList* list, int fd, pthread_t tid, char* nickname, int s
     newPlayer->tid = tid;
     strcpy(newPlayer->name, nickname);
     newPlayer->score = score;
+    newPlayer->wordsCount = 0;
+    newPlayer->wordsCapacity = 10;  // Initial capacity
+    newPlayer->words = (char**)malloc(newPlayer->wordsCapacity * sizeof(char*));
 
     // Add the new player to the list
     list->players[list->size++] = *newPlayer;
@@ -141,6 +139,51 @@ int nicknameAlreadyExists(PlayerList* list, char* nickname) {
     return 0;
 }
 
+int didUserAlreadyWroteWord(PlayerList* list, int playerFd, char* word) {
+    for (int i = 0; i < list->size; i++) {
+        if (list->players[i].fd == playerFd) {
+            for (int j = 0; j < list->players[i].wordsCount; j++) {
+                if (strcmp(list->players[i].words[j], word) == 0) {
+                    return 1;
+                }
+            }
+            break;
+        }
+    }
+    return 0;
+}
+
+void addWordToPlayer(PlayerList* list, int playerFd, char* word) {
+    // Find the player with the specified playerFd
+    for (int i = 0; i < list->size; i++) {
+        if (list->players[i].fd == playerFd) {
+            Player* player = &list->players[i];
+            
+            // Check if we need to reallocate memory for the words array
+            if (player->wordsCount == player->wordsCapacity) {
+                player->wordsCapacity = (player->wordsCapacity > 0) ? player->wordsCapacity * 2 : 10;
+                player->words = (char**)realloc(player->words, player->wordsCapacity * sizeof(char*));
+                if (player->words == NULL) {
+                    perror("Failed to reallocate memory for words array");
+                    exit(EXIT_FAILURE);
+                }
+            }
+            
+            // Add the new word
+            player->words[player->wordsCount] = strdup(word);
+            if (player->words[player->wordsCount] == NULL) {
+                perror("Failed to duplicate word");
+                exit(EXIT_FAILURE);
+            }
+            player->wordsCount++;
+            return;
+        }
+    }
+    
+    // If the player is not found, handle the error appropriately
+    fprintf(stderr, "Player with fd %d not found\n", playerFd);
+}
+
 void freePlayerList(PlayerList* list) {
     free(list->players);
     free(list);
@@ -149,7 +192,13 @@ void freePlayerList(PlayerList* list) {
 void printPlayerList(PlayerList* list) {
     printf("⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻\n");
     for (int i = 0; i < list->size; i++) {
-        printf(YELLOW("%i - tid: %lu fd: %d nick: %s score: %d\n"), i, (unsigned long)list->players[i].tid, list->players[i].fd, list->players[i].name, list->players[i].score);
+        Player* player = &list->players[i];
+        printf(YELLOW("%i - tid: %lu fd: %d nick: %s score: %d\n"), i, (unsigned long)player->tid, player->fd, player->name, player->score);
+        
+        printf("  Words:\n");
+        for (int j = 0; j < player->wordsCount; j++) {
+            printf("    %s\n", player->words[j]);
+        }
     }
     printf("⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻\n");
 }

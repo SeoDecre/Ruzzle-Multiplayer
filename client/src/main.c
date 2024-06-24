@@ -3,8 +3,8 @@
 #include <unistd.h>
 #include <string.h>
 #include <getopt.h>
-#include "include/macros.h"
-#include "include/client.h"
+#include "macros.h"
+#include "client.h"
 
 int main(int argc, char *argv[]) {
     int port = atoi(argv[1]);

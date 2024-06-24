@@ -6,14 +6,14 @@
 #include "include/macros.h"
 #include "include/server.h"
 
-#define DEFAULT_DURATION 3
+#define DEFAULT_DURATION 180
 
 void usage(const char *progName) {
-    fprintf(stderr, "Usage: %s server_name server_port [--matrici dataFilename] [--durata gameDuration] [--seed rndSeed] [--diz dictionary]\n", progName);
+    fprintf(stderr, "Usage: %s server_name server_port [--matrici matrixFilename] [--durata gameDuration] [--seed rndSeed] [--diz newDictionaryFile]\n", progName);
     exit(EXIT_FAILURE);
 }
 
-void parseArguments(int argc, char *argv[], char **serverName, int *serverPort, char **dataFilename, int *gameDuration, unsigned int *rndSeed, char **dictionary) {
+void parseArguments(int argc, char *argv[], char **serverName, int *serverPort, char **matrixFilename, int *gameDuration, unsigned int *rndSeed, char **newDictionaryFile) {
     if (argc < 3) {
         usage(argv[0]);
     }
@@ -26,10 +26,10 @@ void parseArguments(int argc, char *argv[], char **serverName, int *serverPort, 
         exit(EXIT_FAILURE);
     }
 
-    *dataFilename = NULL;
+    *matrixFilename = NULL;
     *gameDuration = DEFAULT_DURATION;
     *rndSeed = 0;
-    *dictionary = NULL;
+    *newDictionaryFile = NULL;
 
     int opt;
     while (1) {
@@ -48,7 +48,7 @@ void parseArguments(int argc, char *argv[], char **serverName, int *serverPort, 
 
         switch (opt) {
             case 'm':
-                *dataFilename = optarg;
+                *matrixFilename = optarg;
                 break;
             case 'd':
                 *gameDuration = atoi(optarg);
@@ -61,7 +61,7 @@ void parseArguments(int argc, char *argv[], char **serverName, int *serverPort, 
                 *rndSeed = (unsigned int)atoi(optarg);
                 break;
             case 'z':
-                *dictionary = optarg;
+                *newDictionaryFile = optarg;
                 break;
             default:
                 usage(argv[0]);
@@ -69,30 +69,29 @@ void parseArguments(int argc, char *argv[], char **serverName, int *serverPort, 
     }
 }
 
-void printConfig(const char *serverName, int serverPort, const char *dataFilename, int gameDuration, unsigned int rndSeed, const char *dictionary) {
+void printConfig(const char *serverName, int serverPort, const char *matrixFilename, int gameDuration, unsigned int rndSeed, const char *newDictionaryFile) {
     printf("Server name: %s\n", serverName);
     printf("Server port: %d\n", serverPort);
-    dataFilename ? printf("Data filename: %s\n", dataFilename) : printf("Data filename: not provided, will generate matrices randomly.\n");
+    matrixFilename ? printf("Matrix filename: %s\n", matrixFilename) : printf("Matrix filename: not provided, will generate matrices randomly.\n");
 
     printf("Game duration: %d minutes\n", gameDuration);
     printf("Random seed: %u\n", rndSeed);
-    dictionary ? printf("Dictionary file: %s\n", dictionary) :printf("Dictionary file: not provided, using default dictionary.\n");
+    newDictionaryFile ? printf("New dictionary file: %s\n", newDictionaryFile) :printf("New dictionary file: not provided, using default newDictionaryFile.\n");
 }
 
 int main(int argc, char *argv[]) {
     char *serverName;
     int serverPort;
-    char *dataFilename;
+    char *matrixFilename;
     int gameDuration;
     unsigned int rndSeed;
-    char *dictionary;
+    char *newDictionaryFile;
 
-    parseArguments(argc, argv, &serverName, &serverPort, &dataFilename, &gameDuration, &rndSeed, &dictionary);
-    printConfig(serverName, serverPort, dataFilename, gameDuration, rndSeed, dictionary);
+    parseArguments(argc, argv, &serverName, &serverPort, &matrixFilename, &gameDuration, &rndSeed, &newDictionaryFile);
+    printConfig(serverName, serverPort, matrixFilename, gameDuration, rndSeed, newDictionaryFile);
 
-    // Your server initialization and execution code goes here
-    printf("Server started at localhost:%d\n", serverPort);
-    server(serverPort);
+    // Server initialization
+    server(serverPort, matrixFilename, gameDuration, rndSeed, newDictionaryFile);
 
     return 0;
 }

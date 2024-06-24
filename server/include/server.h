@@ -19,6 +19,8 @@
 #include "macros.h"
 #include "game_matrix.h"
 #include "game_players.h"
+#include "dictionary.h"
+#include "colors.h"
 
 #define MSG_OK 'K'
 #define MSG_ERR 'E'
@@ -40,6 +42,7 @@ typedef struct {
     Cell matrix[MATRIX_SIZE][MATRIX_SIZE];
     PlayerList* playersList;
     Player* player;
+    TrieNode* trieRoot;
 } ClientThreadParams;
 
 typedef enum {
@@ -47,7 +50,7 @@ typedef enum {
     GAME_STATE
 } ServerState;
 
-void server(int port);
+void server(int serverPort, const char *matrixFilename, int gameDuration, unsigned int rndSeed, const char *newDictionaryFile);
 void *handleClient(void *arg);
 Message parseMessage(char* buffer);
 int serializeMessage(const Message* msg, char* buffer);

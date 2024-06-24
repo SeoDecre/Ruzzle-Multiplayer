@@ -1,8 +1,8 @@
 #include "game_matrix.h"
 
-static char* letters = "ABCDEFGHILMNOPQRSTUVZ";
+static char* letters = "ABCDEFGHILMNOP*RSTUVZ";
 
-void initMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]) {
+void initRandomMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]) {
     int i, j;
 
     // Fill the matrix with random letters
@@ -14,6 +14,55 @@ void initMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]) {
     }
 }
 
+void createNextMatrixFromFile(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], const char* fileName) {
+    static FILE *file;
+    static int currentLine = 0;
+
+    file = fopen(fileName, "r");
+    if (file == NULL) {
+        perror("Error opening file");
+        exit(EXIT_FAILURE);
+    }
+
+    char buffer[50]; // buffer to hold one line of the file
+
+    // Skip lines until we reach the desired one
+    for (int i = 0; i <= currentLine; i++) {
+        if (fgets(buffer, sizeof(buffer), file) == NULL) {
+            perror("Error reading line from file");
+            fclose(file);
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    printf("MATRIX BUFFER: %s\n", buffer);
+
+    // Fill the matrix with characters from the current line
+    char* token = strtok(buffer, " ");
+    int k = 0;
+    for (int i = 0; i < MATRIX_SIZE; i++) {
+        for (int j = 0; j < MATRIX_SIZE; j++) {
+            if (token == NULL) {
+                perror("Error parsing line from file");
+                fclose(file);
+                exit(EXIT_FAILURE);
+            }
+            matrix[i][j].letter = token[0];
+            matrix[i][j].color = WHITE;
+            token = strtok(NULL, " ");
+            k++;
+        }
+    }
+
+    // Prepare for the next call
+    currentLine++;
+    if (feof(file)) {
+        fclose(file);
+        file = NULL;
+        currentLine = 0; // Reset for potential reuse
+    }
+}
+
 int doesWordExistInMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* word) {
     int found = 0, score = 0, i, j;
 
@@ -22,7 +71,7 @@ int doesWordExistInMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* word) {
     // Search for the source cells (first letter of the word)
     for (i = 0; i < MATRIX_SIZE; i++) {
         for (j = 0; j < MATRIX_SIZE; j++) {
-            if (matrix[i][j].letter == word[0]) {
+            if (TO_LOWERCASE(matrix[i][j].letter) == TO_LOWERCASE(word[0])) {
                 // Perform DFS to check for the word
                 isWordValid(matrix, &found, word, 0, i, j);
                 // Clean the matrix for next searches
@@ -51,7 +100,7 @@ void isWordValid(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], int* found, char* word, 
 
         // Avoid useless backtracking recursive calls
         if (nextRow >= 0 && nextRow < MATRIX_SIZE && nextCol >= 0 && nextCol < MATRIX_SIZE &&
-            matrix[nextRow][nextCol].letter == word[currentWordIdx + 1] && matrix[nextRow][nextCol].color == WHITE) {
+            TO_LOWERCASE(matrix[nextRow][nextCol].letter) == TO_LOWERCASE(word[currentWordIdx + 1]) && matrix[nextRow][nextCol].color == WHITE) {
             matrix[currentRow][currentCol].color = BLACK;
             isWordValid(matrix, found, word, currentWordIdx + 1, nextRow, nextCol);
         }

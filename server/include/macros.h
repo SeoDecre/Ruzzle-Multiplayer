@@ -27,6 +27,9 @@
 // Print error message with additional info and exit
 #define ERROR_MSG_INFO(m, info) { fprintf(stderr, "%s: %s\n", m, info); exit(EXIT_FAILURE); }
 
+// To lower-case character
+#define TO_LOWERCASE(c) (((c) >= 'A' && (c) <= 'Z') ? ((c) + ('a' - 'A')) : (c))
+
 static const int dummy = 0;
 
 #endif /* MACROS_H */
