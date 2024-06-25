@@ -16,6 +16,7 @@
 #include <stdbool.h>
 #include <sys/select.h>
 #include <time.h>
+#include <signal.h>
 #include "macros.h"
 #include "colors.h"
 #include "game_matrix.h"
@@ -29,6 +30,7 @@
 #define MSG_PAROLA 'W'
 #define MSG_PUNTI_FINALI 'F'
 #define MSG_PUNTI_PAROLA 'P'
+#define MAX_SERVICE_RETURN_MSG_SIZE 256
 
 typedef struct {
     char type;        // 1 byte
@@ -40,6 +42,7 @@ typedef struct {
 typedef struct {
     int clientFd;
     char* clientInput;
+    char* serverResponse;
     char* serviceReturnMsg;
     int* score;
     int* timeLeft;
@@ -52,9 +55,9 @@ int serializeMessage(const Message* msg, char** buffer);
 
 Message parseMessage(const char* buffer);
 
-void processCommand(const char* command, const char* content, char* serviceReturnMsg, int clientFd, pthread_mutex_t* mutex);
+void processCommand(const char* command, const char* content, ThreadParams* params);
 
-void* sendMessage(void* arg);
+void sendMessage(void* arg);
 
 void displayGameShell(ThreadParams* params);
 

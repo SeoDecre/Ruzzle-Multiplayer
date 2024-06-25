@@ -1,5 +1,11 @@
 #include "client.h"
 
+volatile sig_atomic_t stop = 0;
+
+void handleSigint(int sig) {
+    stop = 1;
+}
+
 int serializeMessage(const Message* msg, char** buffer) {
     int totalSize = sizeof(char) + sizeof(int) + msg->size;
     *buffer = (char*)malloc(totalSize);
@@ -20,23 +26,21 @@ Message parseMessage(const char* buffer) {
     msg.type = buffer[0];
     memcpy(&msg.size, buffer + sizeof(char), sizeof(int));
 
-    msg.payload = (char*)malloc(msg.size);
-    if (msg.payload == NULL) {
-        perror("Failed to allocate memory for payload");
-        exit(EXIT_FAILURE);
-    }
+    SYSCN(msg.payload, (char*)malloc(msg.size + 1), "Failed to allocate memory for payload");
     memcpy(msg.payload, buffer + sizeof(char) + sizeof(int), msg.size);
+    msg.payload[msg.size] = '\0';
 
     return msg;
 }
 
-void processCommand(const char* command, const char* content, char* serviceReturnMsg, int clientFd, pthread_mutex_t* mutex) {
+void processCommand(const char* command, const char* content, ThreadParams* params) {
     Message msg;
     int retvalue;
     char* buffer = NULL;
 
     if (strcmp(command, "aiuto") == 0) {
-        strcpy(serviceReturnMsg, "Comandi disponibili:\naiuto\nmatrice\np <parola>\nfine\n");
+        strcpy(params->serviceReturnMsg, "Comandi disponibili:\naiuto\nmatrice\np <parola>\nfine\n");
+        displayGameShell(params);
     } else {
         if (strcmp(command, "registra_utente") == 0) {
             msg.type = MSG_REGISTRA_UTENTE;
@@ -44,13 +48,14 @@ void processCommand(const char* command, const char* content, char* serviceRetur
             msg.type = MSG_MATRICE;
         } else if (strcmp(command, "p") == 0) {
             msg.type = MSG_PAROLA;
-        } else if (strcmp(command, "fine") == 0) {
-            free(serviceReturnMsg);
-            pthread_mutex_destroy(mutex);
-            SYSC(retvalue, close(clientFd), "close");
-            exit(EXIT_SUCCESS);
         } else {
-            strcpy(serviceReturnMsg, "Comando non riconosciuto. Digita 'aiuto' per vedere i comandi disponibili.\n");
+            strcpy(params->serviceReturnMsg, "Comando non riconosciuto. Digita 'aiuto' per vedere i comandi disponibili.\n");
+            displayGameShell(params);
+            return;
+        }
+
+        if (content == NULL) {
+            fprintf(stderr, "Content is null\n");
             return;
         }
 
@@ -59,17 +64,17 @@ void processCommand(const char* command, const char* content, char* serviceRetur
         int totalSize = serializeMessage(&msg, &buffer);
 
         // Check what we're sending
-        printf("SENDING %d bytes: \n", totalSize);
-        for (int i = 0; i < totalSize; i++) printf("%02x ", (unsigned char)buffer[i]);
-        printf("\n");
+        // printf("SENDING %d bytes: \n", totalSize);
+        // for (int i = 0; i < totalSize; i++) printf("%02x ", (unsigned char)buffer[i]);
+        // printf("\n");
 
-        SYSC(retvalue, write(clientFd, buffer, totalSize), "write");
+        SYSC(retvalue, write(params->clientFd, buffer, totalSize), "write");
 
         free(buffer);
     }
 }
 
-void* sendMessage(void* arg) {
+void sendMessage(void* arg) {
     ThreadParams* params = (ThreadParams*)arg;
 
     // The clientInput string will contain a command and, eventually, the message content
@@ -77,14 +82,28 @@ void* sendMessage(void* arg) {
     char* command = (char*)malloc(16); // The longest possible command is 15 bytes long (registra_utente)
     char* content = (char*)malloc(21); // The longest possible content is 20 bytes long (nickname length)
 
+    if (command == NULL || content == NULL) {
+        perror("Failed to allocate memory");
+        exit(EXIT_FAILURE);
+    }
+
+    memset(command, 0, 16);
+    memset(content, 0, 21);
+
     // Parse client input
-    sscanf(params->clientInput, "%15s%*c%20[^\n]", command, content);
+    if (sscanf(params->clientInput, "%15s%*c%20[^\n]", command, content) < 1) {
+        fprintf(stderr, "Failed to parse client input\n");
+        free(command);
+        free(content);
+        return;
+    }
 
     pthread_mutex_lock(&(params->mutex));
-    processCommand(command, content, params->serviceReturnMsg, params->clientFd, &(params->mutex));
+    processCommand(command, content, params);
     pthread_mutex_unlock(&(params->mutex));
-    
-    return NULL;
+
+    free(command);
+    free(content);
 }
 
 void displayGameShell(ThreadParams* params) {
@@ -92,7 +111,7 @@ void displayGameShell(ThreadParams* params) {
     printf("\033[2J"); // ANSI escape sequence to clear screen
     printf("\033[H");  // ANSI escape sequence to move cursor to top-left
 
-    printf("⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻\n");
+    printf("⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻\n");
     printf(YELLOW("Time left: %d\n"), *params->timeLeft);
     
     // Printing the matrix
@@ -100,7 +119,7 @@ void displayGameShell(ThreadParams* params) {
 
     // Print the current score
     printf(CYAN("Score: %d\n"), *params->score);
-    printf("⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻\n");
+    printf("⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻⎻\n");
 
     // Printing shell service messages, if not NULL or invalid
     printf(MAGENTA("\n%s\n"), params->serviceReturnMsg);
@@ -136,16 +155,15 @@ void processReceivedMessage(Message* msg, ThreadParams* params) {
 
 void* handleReceivedMessage(void* arg) {
     ThreadParams* params = (ThreadParams*)arg;
-    char* buffer = (char*)malloc(1024);
     int retvalue;
-
-    while (1) {
+    
+    while (!stop) {
         // Reading server response through file descriptor
-        SYSC(retvalue, read(params->clientFd, buffer, 1024), "nella read"); // Lettura sul fd client
+        SYSC(retvalue, read(params->clientFd, params->serverResponse, MAX_SERVICE_RETURN_MSG_SIZE), "nella read"); // Lettura sul fd client
 
         // Parsing obtained buffer
-        Message msg = parseMessage(buffer); // Also prints its content
-
+        Message msg = parseMessage(params->serverResponse); // Also prints its content
+        
         pthread_mutex_lock(&(params->mutex));
         processReceivedMessage(&msg, params);
         pthread_mutex_unlock(&(params->mutex));
@@ -153,13 +171,13 @@ void* handleReceivedMessage(void* arg) {
         free(msg.payload);
         displayGameShell(params);
     }
-
+    
     return NULL;
 }
 
 void client(int port) {
-    struct sockaddr_in server_addr;
-    int client_fd, retvalue, score = 0, timeLeft = 0;
+    struct sockaddr_in serverAddr;
+    int clientFd, retvalue, score = 0, timeLeft = 0;
     pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
     // Variable used to store the matrix
@@ -168,19 +186,31 @@ void client(int port) {
     // Input message of the client
     char* clientInput = (char*)malloc(35);
 
+    // Server response buffer
+    char* serverResponse = (char*)malloc(MAX_SERVICE_RETURN_MSG_SIZE);
+
     // Info message returned by server or other command output
-	char* serviceMsg = (char*)malloc(100);
+    char* serviceMsg = (char*)malloc(100);
+
+    if (clientInput == NULL || serverResponse == NULL || serviceMsg == NULL) {
+        perror("Failed to allocate memory");
+        exit(EXIT_FAILURE);
+    }
+
+    memset(clientInput, 0, 35);
+    memset(serverResponse, 0, MAX_SERVICE_RETURN_MSG_SIZE);
+    memset(serviceMsg, 0, 100);
 
     // socket address struct initialization, storing address and port used to create the connection
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(port);
-    server_addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // 127.0.0.1
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(port);
+    serverAddr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // 127.0.0.1
 
     // Socket creation
-    SYSC(client_fd, socket(AF_INET, SOCK_STREAM, 0), "nella socket");
+    SYSC(clientFd, socket(AF_INET, SOCK_STREAM, 0), "nella socket");
 
     // Trying connection with the server
-    SYSC(retvalue, connect(client_fd, (struct sockaddr *) &server_addr, sizeof(server_addr)), "nella connect");
+    SYSC(retvalue, connect(clientFd, (struct sockaddr *)&serverAddr, sizeof(serverAddr)), "nella connect");
 
     // Storing a connection info message so that it will displayed in the shell
     strcpy(serviceMsg, GREEN("Connected to the server"));
@@ -188,12 +218,13 @@ void client(int port) {
     // Initialization of the matrix to "empty" chars
     // It will be filled eventually with a server request
     initMatrix(matrix);
-    
+
     // Thread parameters
     ThreadParams params = {
-        .clientFd = client_fd,
+        .clientFd = clientFd,
         .clientInput = clientInput,
-        .serviceReturnMsg = serviceMsg,
+        .serverResponse = serverResponse,
+        .serviceReturnMsg = serviceMsg, // Change with shellInfoMessage
         .matrix = matrix,
         .score = &score,
         .timeLeft = &timeLeft,
@@ -205,24 +236,35 @@ void client(int port) {
     pthread_t receiverTid;
     pthread_create(&receiverTid, NULL, handleReceivedMessage, (void *)&params);
 
-    // Main loop
-    while (1) {
-        displayGameShell(&params);
+    // Set up signal handler for Ctrl+C
+    signal(SIGINT, handleSigint);
 
+    // Displaying game shell (will be updated accordingly to server responses)
+    displayGameShell(&params);
+
+    // Main loop
+    while (!stop) {
         // Read user input
-        if (scanf("%69[^\n]%*c", clientInput) != 1) {
+        if (scanf("%34[^\n]%*c", clientInput) != 1) {
             // Skip to next iteration
             continue;
         }
 
+        if (strcmp(clientInput, "fine") == 0) break;
         sendMessage((void *)&params);
     }
 
+    // Stopping and removing thread
+    pthread_cancel(receiverTid);
+    pthread_join(receiverTid, NULL);
+    pthread_mutex_destroy(&mutex);
+
     // Freeing memory
     free(clientInput);
+    free(serverResponse);
     free(serviceMsg);
-    pthread_mutex_destroy(&(params.mutex));
 
     // Socket closure
-    SYSC(retvalue, close(client_fd), "nella close");
+    SYSC(retvalue, close(clientFd), "nella close");
+    printf("PROGRAM ENDED\n");
 }

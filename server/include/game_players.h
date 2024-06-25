@@ -6,7 +6,7 @@
 #include <string.h>
 #include <pthread.h>
 
-#define MAX_CLIENTS 100
+#define MAX_CLIENTS 32
 #define INITIAL_CAPACITY 10
 #define MAX_NICKNAME_LENGTH 20
 

@@ -78,7 +78,7 @@ void switchState(int signum) {
         pthread_create(&scorer, NULL, scorerThread, NULL);
     }
 
-    // Set the next alarm for 1 minute
+    // Set the next alarm for n seconds
     alarm(15);
 }
 
