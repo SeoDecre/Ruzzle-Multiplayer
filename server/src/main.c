@@ -3,12 +3,12 @@
 #include <unistd.h>
 #include <string.h>
 #include <getopt.h>
-#include "include/macros.h"
-#include "include/server.h"
+#include "macros.h"
+#include "server.h"
 
 #define DEFAULT_DURATION 180
 
-void usage(const char *progName) {
+void usage(char *progName) {
     fprintf(stderr, "Usage: %s server_name server_port [--matrici matrixFilename] [--durata gameDuration] [--seed rndSeed] [--diz newDictionaryFile]\n", progName);
     exit(EXIT_FAILURE);
 }
@@ -69,14 +69,14 @@ void parseArguments(int argc, char *argv[], char **serverName, int *serverPort, 
     }
 }
 
-void printConfig(const char *serverName, int serverPort, const char *matrixFilename, int gameDuration, unsigned int rndSeed, const char *newDictionaryFile) {
+void printConfig(char *serverName, int serverPort, char *matrixFilename, int gameDuration, unsigned int rndSeed, char *newDictionaryFile) {
     printf("Server name: %s\n", serverName);
     printf("Server port: %d\n", serverPort);
     matrixFilename ? printf("Matrix filename: %s\n", matrixFilename) : printf("Matrix filename: not provided, will generate matrices randomly.\n");
 
-    printf("Game duration: %d minutes\n", gameDuration);
+    printf("Game duration: %d seconds\n", gameDuration);
     printf("Random seed: %u\n", rndSeed);
-    newDictionaryFile ? printf("New dictionary file: %s\n", newDictionaryFile) :printf("New dictionary file: not provided, using default newDictionaryFile.\n");
+    newDictionaryFile ? printf("New dictionary file: %s\n", newDictionaryFile) :printf("New dictionary file: not provided, using default newDictionaryFile\n");
 }
 
 int main(int argc, char *argv[]) {
@@ -91,7 +91,7 @@ int main(int argc, char *argv[]) {
     printConfig(serverName, serverPort, matrixFilename, gameDuration, rndSeed, newDictionaryFile);
 
     // Server initialization
-    server(serverPort, matrixFilename, gameDuration, rndSeed, newDictionaryFile);
+    server(serverName, serverPort, matrixFilename, gameDuration, rndSeed, newDictionaryFile);
 
     return 0;
 }

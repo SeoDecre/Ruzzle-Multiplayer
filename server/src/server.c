@@ -1,9 +1,18 @@
 #include "server.h"
 
 volatile ServerState currentState = WAITING_STATE;
-PlayerList* playersList;
 pthread_mutex_t list_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t list_cond = PTHREAD_COND_INITIALIZER;
+
+PlayerList* playersList;
+PlayerScoreNode* scoresList;
+Cell matrix[MATRIX_SIZE][MATRIX_SIZE];
+TrieNode* trieRoot;
+int matchTime;
+
+int isGameEnded = 0;
+int areScoresInPlayersListReady = 0;
+int isCSVResultsScoreboardReady = 0;
 
 void toLowercase(char *str) {
     if (str == NULL) return;
@@ -14,56 +23,7 @@ void toLowercase(char *str) {
     }
 }
 
-int comparePlayers(const void *a, const void *b) {
-    Player *playerA = (Player *)a;
-    Player *playerB = (Player *)b;
-    return playerB->score - playerA->score; // Sort in descending order
-}
-
-void *scorerThread() {
-    // Allocate memory for the result string
-    char result[1024] = "";
-
-    // Lock the mutex to ensure thread safety while accessing playersList
-    pthread_mutex_lock(&list_mutex);
-
-    // Sort playersList by score in descending order
-    qsort(playersList->players, playersList->size, sizeof(Player), comparePlayers);
-
-    // Build the CSV message
-    for (int i = 0; i < playersList->size; i++) {
-        char entry[100];
-        sprintf(entry, "%s,%d,", playersList->players[i].name, playersList->players[i].score);
-        strcat(result, entry);
-    }
-
-    // Unlock the mutex after accessing playersList
-    pthread_mutex_unlock(&list_mutex);
-
-    // Replace the last comma with a null terminator
-    result[strlen(result) - 1] = '\0';
-
-    printf("Final results: %s\n", result);
-
-    // Prepare the response message
-    Message responseMsg;
-    responseMsg.payload = (char *)malloc(1024);
-    responseMsg.type = MSG_PUNTI_FINALI;
-    strcpy(responseMsg.payload, result);
-    responseMsg.size = strlen(responseMsg.payload);
-
-    // Send the response message to each client
-    for (int i = 0; i < playersList->size; i++) {
-        sendMessageToClient(responseMsg, playersList->players[i].fd);
-    }
-
-    // Free the allocated memory for the response message payload
-    free(responseMsg.payload);
-
-    return NULL;
-}
-
-void switchState(int signum) {
+void switchState() {
     if (currentState == WAITING_STATE) {
         currentState = GAME_STATE;
         printf(GREEN("Switched to GAME_STATE\n"));
@@ -71,15 +31,15 @@ void switchState(int signum) {
         currentState = WAITING_STATE;
         printf(YELLOW("Switched to WAITING_STATE\n"));
 
-        // Game has just ended, creating csv game ranking to send to the clients
-        // Let's start a new "scorer" thread which creates the csv ranking from the players list
-        // This new thread will also tell all the client threads to communicate the csv ranking to each client
-        pthread_t scorer;
-        pthread_create(&scorer, NULL, scorerThread, NULL);
+        // Initializating the scores list that will be filled by the client threads
+        scoresList = createPlayerScoreList(playersList->size);
+
+        // Triggering the scorer thread and the sendFinalResults threads
+        isGameEnded = 1;
     }
 
     // Set the next alarm for n seconds
-    alarm(15);
+    alarm(matchTime);
 }
 
 unsigned int getRemainingTime() {
@@ -132,7 +92,7 @@ Message parseMessage(char* buffer) {
 }
 
 void sendMessageToClient(Message msg, int clientFd) {
-    int retvalue;
+    int retValue;
     // Allocating correct amount of bytes
     int totalSize = sizeof(char) + sizeof(int) + msg.size;
     char* buffer = (char*)malloc(totalSize);
@@ -148,23 +108,96 @@ void sendMessageToClient(Message msg, int clientFd) {
     printf("\n");
 
     // Send the serialized message to the server
-    SYSC(retvalue, write(clientFd, buffer, totalSize), "nella write");
+    SYSC(retValue, write(clientFd, buffer, totalSize), "nella write");
 }
 
-void *handleClient(void *arg) {
-    ClientThreadParams *params = (ClientThreadParams *)arg;
-    if (params == NULL || params->player == NULL || params->playersList == NULL) {
-        fprintf(stderr, "Invalid parameters passed to thread\n");
-        pthread_exit(NULL);
+void *scorerThread() {
+    // Lock the mutex to ensure thread safety while accessing playersList
+    pthread_mutex_lock(&list_mutex);
+
+    // Wait until all threads have added their scores
+    while (!areScoresInPlayersListReady) {
+        pthread_cond_wait(&list_cond, &list_mutex);
     }
+
+    // Allocate memory for the result string
+    char result[1024] = "";
+
+    // Sort scoresList by score in descending order
+    qsort(scoresList->players, scoresList->size, sizeof(Player), comparePlayers);
+
+    // Build the CSV message
+    for (int i = 0; i < scoresList->size; i++) {
+        char entry[100];
+        sprintf(entry, "%s,%d,", scoresList->players[i].name, scoresList->players[i].score);
+        strcat(result, entry);
+    }
+
+    // Unlock the mutex after accessing scoresList
+    pthread_mutex_unlock(&list_mutex);
+
+    // Replace the last comma with a null terminator
+    result[strlen(result) - 1] = '\0';
+
+    // Storing the results into the shared structure
+
+    printf("Final results: %s\n", result);
+
+    // Resetting areScoresInPlayersListReady variable for next uses
+    areScoresInPlayersListReady = 0;
+
+    // Notify each sendFinalResults thread the CSV results scoreboard is ready
+    isCSVResultsScoreboardReady = 1;
+
+    // Prepare the response message
+    // Message responseMsg;
+    // responseMsg.payload = (char *)malloc(1024);
+    // responseMsg.type = MSG_PUNTI_FINALI;
+    // strcpy(responseMsg.payload, result);
+    // responseMsg.size = strlen(responseMsg.payload);
+
+    // Free the allocated memory for the response message payload
+    // free(responseMsg.payload);
+
+    return NULL;
+}
+
+void* scoresHandler(void* player) {
+    pthread_mutex_lock(&list_mutex);
+    while (!isGameEnded) {
+        pthread_cond_wait(&list_cond, &list_mutex);
+    }
+
+    // If game is ended then collect all the scores and put them into the shared scoreboardList structure
+    addScorePlayer(scoresList, player->name, player->score);
+
+    // The last thread updating its score player will notify the scorer thread
+    if (scoresList->size == playersList->size) {
+        areScoresInPlayersListReady = 1;
+        isGameEnded = 0;
+    }
+
+    pthread_mutex_unlock(&list_mutex);
+
+    // Signal the scorerThread that final results are ready
+    pthread_mutex_lock(&list_mutex);
+    finalResultsReady = 1;
+    pthread_cond_signal(&list_cond);
+    pthread_mutex_unlock(&list_mutex);
+
+    return NULL;
+}
+
+void* handleClient(void* player) {
+    Player* playerPointer = (Player *)player;
 
     char* buffer = (char*)malloc(1024);
     int valread;
 
     // Read incoming message from client
-    while ((valread = read(params->player->fd, buffer, 1024)) > 0) {
+    while ((valread = read(playerPointer->fd, buffer, 1024)) > 0) {
         // printf("BUFFER size %d %d, %s\n", strlen(buffer), valread, buffer);
-        printf("From client %d: ", params->player->fd);
+        printf("From client %d: ", playerPointer->fd);
         Message msg = parseMessage(buffer); // Also prints the parsed buffer content
         // Allocate memory for the response payload
         Message responseMsg;
@@ -172,22 +205,22 @@ void *handleClient(void *arg) {
 
         switch (msg.type) {
             case MSG_REGISTRA_UTENTE:
-                if (isPlayerAlreadyRegistered(params->playersList, params->player->fd)) {
+                if (isPlayerAlreadyRegistered(playersList, playerPointer->fd)) {
                     responseMsg.type = MSG_ERR;
                     strcpy(responseMsg.payload, "Already registered\n");
                 
                     // Sending response to client
                     responseMsg.size = strlen(responseMsg.payload);
-                    sendMessageToClient(responseMsg, params->player->fd);
+                    sendMessageToClient(responseMsg, playerPointer->fd);
 
                     free(responseMsg.payload);
-                } else if (nicknameAlreadyExists(params->playersList, msg.payload)) {
+                } else if (nicknameAlreadyExists(playersList, msg.payload)) {
                     responseMsg.type = MSG_ERR;
                     strcpy(responseMsg.payload, "Nickname invalid\n");
                     
                     // Sending response to client
                     responseMsg.size = strlen(responseMsg.payload);
-                    sendMessageToClient(responseMsg, params->player->fd);
+                    sendMessageToClient(responseMsg, playerPointer->fd);
 
                     free(responseMsg.payload);
                 } else {
@@ -195,15 +228,15 @@ void *handleClient(void *arg) {
                     responseMsg.type = MSG_OK;
                     strcpy(responseMsg.payload, "Game joined\n");
                     responseMsg.size = strlen(responseMsg.payload);
-                    sendMessageToClient(responseMsg, params->player->fd);
-                    addPlayer(params->playersList, params->player->fd, pthread_self(), msg.payload, 0);
+                    sendMessageToClient(responseMsg, playerPointer->fd);
+                    addPlayer(playersList, playerPointer->fd, pthread_self(), msg.payload, 0);
 
                     // Sending the game matrix if the game is running
                     if (currentState == GAME_STATE) {
                         responseMsg.type = MSG_MATRICE;
-                        memcpy(responseMsg.payload, params->matrix, sizeof(params->matrix));
+                        memcpy(responseMsg.payload, matrix, sizeof(matrix));
                         responseMsg.size = strlen(responseMsg.payload);
-                        sendMessageToClient(responseMsg, params->player->fd);
+                        sendMessageToClient(responseMsg, playerPointer->fd);
                         free(responseMsg.payload);
                     }
 
@@ -213,19 +246,19 @@ void *handleClient(void *arg) {
                     sprintf(timeLeftString, "%d", getRemainingTime());
                     responseMsg.payload = strdup(timeLeftString);
                     responseMsg.size = strlen(responseMsg.payload);
-                    sendMessageToClient(responseMsg, params->player->fd);
+                    sendMessageToClient(responseMsg, playerPointer->fd);
 
                     free(responseMsg.payload);
                 }
                 responseMsg.type == MSG_OK ? printf(GREEN("%s\n"), responseMsg.payload) : printf(RED("%s\n"), responseMsg.payload);
-                printPlayerList(params->playersList);
+                printPlayerList(playersList);
 
                 break;
             case MSG_MATRICE:
                 if (currentState == GAME_STATE) {
-                    if (isPlayerAlreadyRegistered(params->playersList, params->player->fd)) {
+                    if (isPlayerAlreadyRegistered(playersList, playerPointer->fd)) {
                         responseMsg.type = MSG_MATRICE;
-                        memcpy(responseMsg.payload, params->matrix, sizeof(params->matrix));
+                        memcpy(responseMsg.payload, matrix, sizeof(matrix));
                     } else {
                         responseMsg.type = MSG_ERR;
                         strcpy(responseMsg.payload, "You're not registered yet\n");
@@ -233,7 +266,7 @@ void *handleClient(void *arg) {
 
                     // Sending response to client
                     responseMsg.size = strlen(responseMsg.payload);
-                    sendMessageToClient(responseMsg, params->player->fd);
+                    sendMessageToClient(responseMsg, playerPointer->fd);
 
                     free(responseMsg.payload);
                     sleep(0.5);
@@ -248,7 +281,7 @@ void *handleClient(void *arg) {
                 responseMsg.size = strlen(responseMsg.payload);
 
                 // Sending second message
-                sendMessageToClient(responseMsg, params->player->fd);
+                sendMessageToClient(responseMsg, playerPointer->fd);
 
                 free(responseMsg.payload);
                 break;
@@ -258,44 +291,44 @@ void *handleClient(void *arg) {
                 printf("TO LOWERCASE: %s\n", msg.payload);
 
                 // Deciding what to response to client
-                if (!isPlayerAlreadyRegistered(params->playersList, params->player->fd)) {
+                if (!isPlayerAlreadyRegistered(playersList, playerPointer->fd)) {
                     responseMsg.type = MSG_ERR;
-                    strcpy(responseMsg.payload, "You're not registered yet\n");
+                    strcpy(responseMsg.payload, "You're not registered yet");
                 } else if (currentState == WAITING_STATE) {
                     responseMsg.type = MSG_ERR;
-                    strcpy(responseMsg.payload, "Wait for the game to start\n");
-                } else if (!doesWordExistInMatrix(params->matrix, msg.payload) || !search(params->trieRoot, msg.payload)) {
+                    strcpy(responseMsg.payload, "Waiting for match to start");
+                } else if (!doesWordExistInMatrix(matrix, msg.payload) || !search(trieRoot, msg.payload)) {
                     // If not present in the matrix or in the dictionary
                     responseMsg.type = MSG_ERR;
-                    strcpy(responseMsg.payload, "Invalid word\n");
-                } else if (didUserAlreadyWroteWord(params->playersList, params->player->fd, msg.payload)) {
+                    strcpy(responseMsg.payload, "Invalid word");
+                } else if (didUserAlreadyWroteWord(playersList, playerPointer->fd, msg.payload)) {
                     responseMsg.type = MSG_PUNTI_PAROLA;
                     strcpy(responseMsg.payload, "0\n");
                 } else {
                     responseMsg.type = MSG_PUNTI_PAROLA;
 
                     int earnedPoints = strlen(msg.payload);
-                    printf(GREEN("Word %s exists, +%d\n"), msg.payload, strlen(msg.payload));
+                    printf(GREEN("Word %s exists, +%d\n"), msg.payload, (int)strlen(msg.payload));
 
                     // Updating Player score
-                    int updatedScore = getPlayerScore(params->playersList, params->player->fd) + earnedPoints;
-                    updatePlayerScore(params->playersList, params->player->fd, updatedScore);
+                    int updatedScore = getPlayerScore(playersList, playerPointer->fd) + earnedPoints;
+                    updatePlayerScore(playersList, playerPointer->fd, updatedScore);
 
                     // Updating player list of words
-                    addWordToPlayer(params->playersList, params->player->fd, msg.payload);
+                    addWordToPlayer(playersList, playerPointer->fd, msg.payload);
 
                     // Sending how much points the given word was as string
                     char pointsString[2];
-                    sprintf(pointsString, "%d\n", earnedPoints);
+                    sprintf(pointsString, "%d", earnedPoints);
                     strcpy(responseMsg.payload, pointsString);
 
                     // Printing players list to see updated score
-                    printPlayerList(params->playersList);
+                    printPlayerList(playersList);
                 }
 
                 // Sending response to client
                 responseMsg.size = strlen(responseMsg.payload);
-                sendMessageToClient(responseMsg, params->player->fd);
+                sendMessageToClient(responseMsg, playerPointer->fd);
 
                 free(responseMsg.payload);
                 break;
@@ -304,86 +337,69 @@ void *handleClient(void *arg) {
         }
     }
 
-    printf("Client %s disconnected\n", params->player->name);
-    removePlayer(params->playersList, params->player->fd);
-    printPlayerList(params->playersList);
-    close(params->player->fd);
+    printf("Client %s disconnected\n", playerPointer->name);
+    removePlayer(playersList, playerPointer->fd);
+    printPlayerList(playersList);
+    close(playerPointer->fd);
 
     // Cleanup thread resources
     pthread_exit(NULL);
 }
 
-void server(int serverPort, const char *matrixFilename, int gameDuration, unsigned int rndSeed, const char *newDictionaryFile) {
-    // Seed the random number generator with current time
-    srand(time(NULL));
-
+void server(char* serverName, int serverPort, char* matrixFilename, int gameDuration, unsigned int rndSeed, char *newDictionaryFile) {
     playersList = createPlayerList();
-    int server_fd, retvalue, new_client_fd;
-    fd_set readfds;
-    struct sockaddr_in server_addr, client_addr;
-    socklen_t client_addr_len;
-    char buffer[MATRIX_BYTES + sizeof(int)];
+    int serverFd, retValue, newClientFd;
+    struct sockaddr_in serverAddress, clientAddress;
+    socklen_t clientAddressLength;
+    srand(rndSeed);
 
-    // Inizializzazione della struttura server_addr
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(serverPort);
-    server_addr.sin_addr.s_addr = htonl(INADDR_ANY); // 127.0.0.1
+    // Inizializzazione della struttura serverAddress
+    serverAddress.sin_family = AF_INET;
+    serverAddress.sin_port = htons(serverPort);
+    CHECK_NEGATIVE(inet_pton(AF_INET, serverName, &serverAddress.sin_addr), "Invalid address");
 
-    // Creazione del socket
-    SYSC(server_fd, socket(AF_INET, SOCK_STREAM, 0), "nella socket");
+    // Creazione del socket, binding e listen
+    SYSC(serverFd, socket(AF_INET, SOCK_STREAM, 0), "Unable to create socket socket");
+    SYSC(retValue, bind(serverFd, (struct sockaddr *) &serverAddress, sizeof(serverAddress)), "Enable to bind socket");
+    SYSC(retValue, listen(serverFd, MAX_CLIENTS), "Unable to start listen");
 
-    // Binding
-    SYSC(retvalue, bind(server_fd, (struct sockaddr *) &server_addr, sizeof(server_addr)), "nella bind");
-
-    // Listen
-    SYSC(retvalue, listen(server_fd, MAX_CLIENTS), "nella listen");
-
-    // Creating matrix using random letters
-    Cell matrix[MATRIX_SIZE][MATRIX_SIZE];
+    // Filling matrix up
     matrixFilename ? createNextMatrixFromFile(matrix, matrixFilename) : initRandomMatrix(matrix);
-
-    // Printing matrix
     printf("Ready to listen.\nGenerated matrix:\n");
     printMatrix(matrix);
 
     // Loading dictionary TODO: Do it using another thread, it might take time
-    TrieNode *root = createNode();
-    loadDictionary(root, "include/dictionary_ita.txt");
+    trieRoot = createNode();
+    loadDictionary(trieRoot, newDictionaryFile ? newDictionaryFile : "include/dictionary_ita.txt");
 
-    // Set up signal handler and initial alarm
+    // Setting up signal handler and initial alarm
     signal(SIGALRM, switchState);
-    alarm(15);
+    matchTime = gameDuration;
+    alarm(gameDuration);
+
+    // Let's start a new scorer thread which creates the csv ranking from the players list
+    // This new thread will also tell all the client threads to communicate the csv ranking to each client
+    pthread_t scorer;
+    pthread_create(&scorer, NULL, scorerThread, NULL);
 
     // Main loop
     while (1) {
         // Accept incoming connection
-        client_addr_len = sizeof(client_addr);
-        SYSC(new_client_fd, accept(server_fd, (struct sockaddr *)&client_addr, &client_addr_len), "Accept failed");
+        clientAddressLength = sizeof(clientAddress);
+        SYSC(newClientFd, accept(serverFd, (struct sockaddr *)&clientAddress, &clientAddressLength), "Failed accepting a new client");
+        printf("Client accepted, socket fd is %d\n", newClientFd);
 
-        printf("Client accepted, socket fd is %d\n", new_client_fd);
+        Player* newPlayer;
+        ALLOCATE_MEMORY(newPlayer, sizeof(Player), "Failed to allocate memory for a new player struct");
+        newPlayer->fd = newClientFd;
 
-        ClientThreadParams *params = (ClientThreadParams *)malloc(sizeof(ClientThreadParams));
-        if (params == NULL) {
-            perror("Failed to allocate memory for client thread parameters");
-            exit(EXIT_FAILURE);
-        }
-        memcpy(params->matrix, matrix, sizeof(matrix));
-        params->playersList = playersList;
+        // Creating a new thread to handle the client requestes and responses
+        pthread_create(&newPlayer->tid, NULL, handleClient, (void *)newPlayer);
 
-        Player *newPlayer = (Player *)malloc(sizeof(Player));
-        if (newPlayer == NULL) {
-            perror("Failed to allocate memory for new player");
-            exit(EXIT_FAILURE);
-        }
-        newPlayer->fd = new_client_fd;
-        params->player = newPlayer;
-        params->trieRoot = root;
-
-        // Creating a new thread to handle the client
-        pthread_create(&newPlayer->tid, NULL, handleClient, (void *)params);
-        pthread_create(&newPlayer->tid, NULL, sendFinalResults, (void *)params);
+        // Creating a new thread to handle the scores collection system and sending the csv scoreboard
+        pthread_create(&newPlayer->tid, NULL, scoresHandler, (void *)newPlayer);
     }
 
-    // Chiusura del socket del server (non raggiungibile)
-    SYSC(retvalue, close(server_fd), "nella close");
+    // Socket server closure
+    SYSC(retValue, close(serverFd), "Failed closing the socket");
 }

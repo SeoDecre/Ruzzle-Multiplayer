@@ -26,7 +26,21 @@ typedef struct {
     int capacity;
 } PlayerList;
 
-PlayerList* createPlayerList();
+typedef struct {
+    char name[MAX_NICKNAME_LENGTH];
+    int score;
+} PlayerScore;
+
+typedef struct {
+    PlayerScore* players;
+    int size;
+} ScoresList;
+
+ScoresList* createPlayerScoreList(int length);
+PlayerScore* addPlayerScore(PlayerList* list, char* nickname, int score);
+void freePlayerScoreList(PlayerList* list);
+
+PlayerList* createPlayerList(void);
 void resizePlayerList(PlayerList* list);
 Player* addPlayer(PlayerList* list, int fd, pthread_t tid, char* nickname, int score);
 void removePlayer(PlayerList* list, int playerFd);
@@ -37,6 +51,7 @@ int isPlayerAlreadyRegistered(PlayerList* list, int playerFd);
 int nicknameAlreadyExists(PlayerList* list, char* nickname);
 int didUserAlreadyWroteWord(PlayerList* list, int playerFd, char* word);
 void addWordToPlayer(PlayerList* list, int playerFd, char* word);
+int comparePlayers(const void *a, const void *b);
 void freePlayerList(PlayerList* list);
 void printPlayerList(PlayerList* list);
 

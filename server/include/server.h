@@ -40,7 +40,6 @@ typedef struct {
 
 typedef struct {
     Cell matrix[MATRIX_SIZE][MATRIX_SIZE];
-    PlayerList* playersList;
     Player* player;
     TrieNode* trieRoot;
 } ClientThreadParams;
@@ -50,8 +49,8 @@ typedef enum {
     GAME_STATE
 } ServerState;
 
-void server(int serverPort, const char *matrixFilename, int gameDuration, unsigned int rndSeed, const char *newDictionaryFile);
-void *handleClient(void *arg);
+void server(char* serverName, int serverPort, char* matrixFilename, int gameDuration, unsigned int rndSeed, char *newDictionaryFile);
+void* handleClient(void* player);
 Message parseMessage(char* buffer);
 int serializeMessage(const Message* msg, char* buffer);
 void sendMessageToClient(Message msg, int fd);

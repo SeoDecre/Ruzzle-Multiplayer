@@ -1,7 +1,37 @@
 #include "game_players.h"
 #include "colors.h"
 
-PlayerList* createPlayerList() {
+ScoresList* createPlayerScoreList(int length) {
+    ScoresList* list = malloc(sizeof(PlayerScore));
+
+    list->players = malloc(length * sizeof(PlayerScore));
+    list->size = 0;
+
+    return list;
+}
+
+PlayerScore* addPlayerScore(ScoresList* list, char* nickname, int score) {
+    // Allocate memory for the new player
+    Player *newPlayer = (Player *)malloc(sizeof(Player));
+
+    // Initialize the new player
+    strcpy(newPlayer->name, nickname);
+    newPlayer->score = score;
+
+    // Add the new player to the list
+    list->players[list->size++] = *newPlayer;
+
+    // Free the allocated memory for newPlayer (not needed after copying)
+    return newPlayer;
+}
+
+void freePlayerList(ScoresList* list) {
+    free(list->players);
+    free(list);
+}
+
+
+PlayerList* createPlayerList(void) {
     PlayerList* list = malloc(sizeof(PlayerList));
 
     if (list == NULL) {
@@ -110,6 +140,7 @@ int getPlayerScore(PlayerList* list, int playerFd) {
     }
 
     printf("Player with ID %d not found\n", playerFd);
+    return -1;
 }
 
 void updatePlayerNickname(PlayerList* list, int playerFd, char* newNickname) {
@@ -182,6 +213,12 @@ void addWordToPlayer(PlayerList* list, int playerFd, char* word) {
     
     // If the player is not found, handle the error appropriately
     fprintf(stderr, "Player with fd %d not found\n", playerFd);
+}
+
+int comparePlayers(const void *a, const void *b) {
+    Player *playerA = (Player *)a;
+    Player *playerB = (Player *)b;
+    return playerB->score - playerA->score; // Sort in descending order
 }
 
 void freePlayerList(PlayerList* list) {

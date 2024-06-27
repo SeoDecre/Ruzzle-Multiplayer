@@ -43,7 +43,8 @@ typedef struct {
     int clientFd;
     char* clientInput;
     char* serverResponse;
-    char* serviceReturnMsg;
+    char* shellInfoMessage;
+    char* finalScoreboard;
     int* score;
     int* timeLeft;
     Cell (*matrix)[MATRIX_SIZE];
@@ -59,6 +60,8 @@ void processCommand(const char* command, const char* content, ThreadParams* para
 
 void sendMessage(void* arg);
 
+void parseAndMemorizeScoreboard(char* finalScoreboard, char* msgPayload);
+
 void displayGameShell(ThreadParams* params);
 
 void processReceivedMessage(Message* msg, ThreadParams* params);
@@ -70,6 +73,6 @@ Main client function
 Creates a new thread to continuously listen to the server
 Uses the main thread to create a shell-alike terminal for user prompts
 */
-void client(int port);
+void client(char* serverName, int port);
 
 #endif /* CLIENT_H */

@@ -1,46 +1,39 @@
-# Compiler
+# Directories
+INCLUDE_DIR = include
+SRC_DIR = src
+BUILD_DIR = build
+BIN_DIR = bin
+
+# Compiler and flags
 CC = gcc
+CFLAGS = -I$(INCLUDE_DIR) -Wall -Wextra -g
 
-# Compiler flags
-CFLAGS = -c
-
-# Source files
-SRC = main.c include/game_matrix.c include/game_players.c include/dictionary.c include/server.c
-
-# Object files
-OBJ = main.o game_matrix.o game_players.o dictionary.o server.o
-
-# Executable
-EXEC = paroliere_srv
-
-# Libraries
-LIBS = -lpthread
+# Source and object files
+SRC_FILES = $(wildcard $(SRC_DIR)/*.c)
+OBJ_FILES = $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRC_FILES))
+TARGET = $(BIN_DIR)/paroliere_srv
 
 # Default target
-all: $(EXEC)
+all: $(BIN_DIR) $(BUILD_DIR) $(TARGET)
 
-# Linking the executable
-$(EXEC): $(OBJ)
-	$(CC) $^ $(LIBS) -o $@
+# Create bin and build directories
+$(BIN_DIR):
+	mkdir -p $(BIN_DIR)
 
-# Compiling source files into object files
-main.o: main.c
-	$(CC) $(CFLAGS) main.c -o main.o
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
 
-game_matrix.o: include/game_matrix.c
-	$(CC) $(CFLAGS) include/game_matrix.c -o game_matrix.o
+# Link object files to create the executable
+$(TARGET): $(OBJ_FILES)
+	$(CC) $(OBJ_FILES) -o $(TARGET)
 
-game_players.o: include/game_players.c
-	$(CC) $(CFLAGS) include/game_players.c -o game_players.o
+# Compile source files to object files
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
-dictionary.o: include/dictionary.c
-	$(CC) $(CFLAGS) include/dictionary.c -o dictionary.o
-
-server.o: include/server.c
-	$(CC) $(CFLAGS) include/server.c -o server.o
-
-# Clean target to remove object files and executable
+# Clean up build and bin directories
 clean:
-	rm -f $(OBJ) $(EXEC)
+	rm -rf $(BUILD_DIR) $(BIN_DIR)
 
+# Phony targets
 .PHONY: all clean

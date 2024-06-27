@@ -19,7 +19,7 @@ typedef struct {
 
 // Function prototypes
 void initRandomMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]);
-void createNextMatrixFromFile(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], const char* fileName);
+void createNextMatrixFromFile(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* fileName);
 int doesWordExistInMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* word);
 void isWordValid(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], int* found, char* word, int currentWordIdx, int currentRow, int currentCol);
 void cleanMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]);

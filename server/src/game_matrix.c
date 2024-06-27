@@ -14,7 +14,7 @@ void initRandomMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]) {
     }
 }
 
-void createNextMatrixFromFile(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], const char* fileName) {
+void createNextMatrixFromFile(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* fileName) {
     static FILE *file;
     static int currentLine = 0;
 
@@ -64,7 +64,7 @@ void createNextMatrixFromFile(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], const char*
 }
 
 int doesWordExistInMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* word) {
-    int found = 0, score = 0, i, j;
+    int found = 0, i, j;
 
     if (strlen(word) < 4 || strlen(word) > 16) return 0;
 
@@ -87,7 +87,7 @@ int doesWordExistInMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* word) {
 }
 
 void isWordValid(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], int* found, char* word, int currentWordIdx, int currentRow, int currentCol) {
-    if (currentWordIdx >= strlen(word) - 1) {
+    if (currentWordIdx >= (int)strlen(word) - 1) {
         *found = 1;
         return;
     }
