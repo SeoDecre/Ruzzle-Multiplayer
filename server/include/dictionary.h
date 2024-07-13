@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include "game_matrix.h"
 #include "macros.h"
 
 #define ALPHABET_SIZE 26

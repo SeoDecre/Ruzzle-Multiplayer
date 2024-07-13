@@ -1,18 +1,55 @@
 #include "server.h"
 
+int serverFd;
 volatile ServerState currentState = WAITING_STATE;
-pthread_mutex_t list_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t list_cond = PTHREAD_COND_INITIALIZER;
+
+// pthread_mutex_t playersMutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t scoresMutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t gameEndedCond = PTHREAD_COND_INITIALIZER;
+pthread_cond_t scoresListCond = PTHREAD_COND_INITIALIZER;
+pthread_cond_t CSVResultsCond = PTHREAD_COND_INITIALIZER;
 
 PlayerList* playersList;
-PlayerScoreNode* scoresList;
+ScoresList scoresList;
 Cell matrix[MATRIX_SIZE][MATRIX_SIZE];
 TrieNode* trieRoot;
+int connectedClients;
 int matchTime;
+char* csvResult;
+char* matrixFileName;
 
-int isGameEnded = 0;
-int areScoresInPlayersListReady = 0;
-int isCSVResultsScoreboardReady = 0;
+int isGameEnded;
+int isScoresListReady;
+int isCSVResultsScoreboardReady;
+
+void cleanup() {
+    // Socket server closure
+    int retValue;
+    SYSC(retValue, close(serverFd), "Failed closing the server socket");
+
+    // Removing all living threads
+    for (int i = 0; i < playersList->size; i++) removePlayer(playersList, playersList->players[i]);
+    isGameEnded = 1;
+    pthread_cond_broadcast(&gameEndedCond);
+
+    // Destroying mutex and conditions
+    pthread_mutex_destroy(&scoresMutex);
+    pthread_cond_destroy(&gameEndedCond);
+    pthread_cond_destroy(&CSVResultsCond);
+
+    // Cleaning resources
+    destroyScoresList(&scoresList);
+    freePlayerList(playersList);
+    if (csvResult) free(csvResult);
+    if (matrixFileName) free(matrixFileName);
+
+    printf(RED("SERVER ENDED\n"));
+}
+
+void handleSigint() {
+    cleanup();
+    exit(0);
+}
 
 void toLowercase(char *str) {
     if (str == NULL) return;
@@ -27,19 +64,34 @@ void switchState() {
     if (currentState == WAITING_STATE) {
         currentState = GAME_STATE;
         printf(GREEN("Switched to GAME_STATE\n"));
+
+        // Resetting for next uses
+        isGameEnded = 0;
+        isScoresListReady = 0;
+        isCSVResultsScoreboardReady = 0;
+
+        // Preparing new matrix for next game
+        printf("FILE NAME: %s\n", matrixFileName);
+        matrixFileName ? createNextMatrixFromFile(matrix, matrixFileName) : initRandomMatrix(matrix);
+        printf("Generated matrix:\n");
+        printMatrix(matrix);
     } else {
         currentState = WAITING_STATE;
         printf(YELLOW("Switched to WAITING_STATE\n"));
 
-        // Initializating the scores list that will be filled by the client threads
-        scoresList = createPlayerScoreList(playersList->size);
+        // Initializating the scores list that will be filled by the client threads with their scores
+        // We don't care if the playersList is empty, the scoresList will be initialized anyway
+        // The scoresList memory allocation increases dynamically, adapting to possible registration in the meanwhile
+        initializeScoresList(&scoresList);
 
-        // Triggering the scorer thread and the sendFinalResults threads
+        // Triggering the sendFinalResults threads
+        // Even though there might not be registered players, we trigger the gameEndedCond so that aventual zombie scoresHandler threads can be canceled
         isGameEnded = 1;
+        pthread_cond_broadcast(&gameEndedCond);
     }
 
     // Set the next alarm for n seconds
-    alarm(matchTime);
+    currentState == GAME_STATE ? alarm(matchTime) : alarm(10);
 }
 
 unsigned int getRemainingTime() {
@@ -85,8 +137,8 @@ Message parseMessage(char* buffer) {
 
     // Printing parsed message
     printf("%c %d %s\n", msg.type, msg.size, msg.payload);
-    for (int i = 0; i < msg.size; i++) printf("%02x ", (unsigned char)msg.payload[i]);
-    printf("\n\n");
+    // for (int i = 0; i < msg.size; i++) printf("%02x ", (unsigned char)msg.payload[i]);
+    // printf("\n\n");
 
     return msg;
 }
@@ -103,89 +155,122 @@ void sendMessageToClient(Message msg, int clientFd) {
     memcpy(buffer + sizeof(char) + sizeof(int), msg.payload, msg.size);
 
     // Check what we're sending
-    printf("SENDING %d bytes: \n", totalSize);
-    for (int i = 0; i < totalSize; i++) printf("%02x ", (unsigned char)buffer[i]);
-    printf("\n");
+    printf("Sending: %c %d %s\n", msg.type, msg.size, msg.payload);
+    // printf("SENDING %d bytes: \n", totalSize);
+    // for (int i = 0; i < totalSize; i++) printf("%02x ", (unsigned char)buffer[i]);
+    // printf("\n");
 
     // Send the serialized message to the server
     SYSC(retValue, write(clientFd, buffer, totalSize), "nella write");
 }
 
-void *scorerThread() {
-    // Lock the mutex to ensure thread safety while accessing playersList
-    pthread_mutex_lock(&list_mutex);
+void* scorerThread() {
+    while (1) {
+        // Lock the mutex to ensure thread safety while accessing scoresList
+        // It could possibly be done without it, because the scorer thread acess the scoresList only after it has been filled up
+        pthread_mutex_lock(&scoresMutex);
 
-    // Wait until all threads have added their scores
-    while (!areScoresInPlayersListReady) {
-        pthread_cond_wait(&list_cond, &list_mutex);
+        // Wait until all threads have added their scores
+        while (!isScoresListReady) {
+            pthread_cond_wait(&scoresListCond, &scoresMutex);
+        }
+
+        printf(GREEN("All players added their score\n"));
+
+        // Resetting for next uses
+        isGameEnded = 0;
+        isScoresListReady = 0;
+
+        // Creating csv ranks result
+        if (csvResult) free(csvResult); // Cleaning from past uses
+        csvResult = createCsvRanks(&scoresList);
+
+        // Unlock the mutex after accessing scoresList
+        pthread_mutex_unlock(&scoresMutex);
+
+        printf("Final results have been listed: %s\n", csvResult);
+
+        // Notify each sendFinalResults thread the CSV results scoreboard is ready
+        isCSVResultsScoreboardReady = 1;
+        pthread_cond_broadcast(&CSVResultsCond);
     }
-
-    // Allocate memory for the result string
-    char result[1024] = "";
-
-    // Sort scoresList by score in descending order
-    qsort(scoresList->players, scoresList->size, sizeof(Player), comparePlayers);
-
-    // Build the CSV message
-    for (int i = 0; i < scoresList->size; i++) {
-        char entry[100];
-        sprintf(entry, "%s,%d,", scoresList->players[i].name, scoresList->players[i].score);
-        strcat(result, entry);
-    }
-
-    // Unlock the mutex after accessing scoresList
-    pthread_mutex_unlock(&list_mutex);
-
-    // Replace the last comma with a null terminator
-    result[strlen(result) - 1] = '\0';
-
-    // Storing the results into the shared structure
-
-    printf("Final results: %s\n", result);
-
-    // Resetting areScoresInPlayersListReady variable for next uses
-    areScoresInPlayersListReady = 0;
-
-    // Notify each sendFinalResults thread the CSV results scoreboard is ready
-    isCSVResultsScoreboardReady = 1;
-
-    // Prepare the response message
-    // Message responseMsg;
-    // responseMsg.payload = (char *)malloc(1024);
-    // responseMsg.type = MSG_PUNTI_FINALI;
-    // strcpy(responseMsg.payload, result);
-    // responseMsg.size = strlen(responseMsg.payload);
-
-    // Free the allocated memory for the response message payload
-    // free(responseMsg.payload);
 
     return NULL;
 }
 
 void* scoresHandler(void* player) {
-    pthread_mutex_lock(&list_mutex);
-    while (!isGameEnded) {
-        pthread_cond_wait(&list_cond, &list_mutex);
+    Player* playerPointer = (Player *)player;
+    printf("PLAYER: %s - %d - score %d\n", playerPointer->name, playerPointer->fd, playerPointer->score);
+
+    // We don't have to worry accessing playerPointer without calling the playersMutex because the handleClient threads use the scoresMutex to prevent race conditions
+    while (1) {
+        pthread_mutex_lock(&scoresMutex);
+        
+        while (!isGameEnded) {
+            printf("%s is waiting for game to end...\n", playerPointer->name);
+
+            // Now the scoresMutex gets unlocked and the thread waits till the gameEndedCond gets triggered by the main thread
+            pthread_cond_wait(&gameEndedCond, &scoresMutex);
+        }
+
+        // Here the scoresMutex is locked, so that we can make safely access the scoresList shared list
+
+        // Since this thread could be alive even though the related player has quitted, we check if that's the case and use this safe spot to clean the resources up
+        if (playerPointer->fd < 0) {
+            printf(RED("%s has quitted previously, scoresHandler thread ended\n"), playerPointer->name);
+    
+            // Free the memory associated with the player
+            free(playerPointer->words);
+            free(playerPointer);
+    
+            // Unlocking the mutex
+            pthread_mutex_unlock(&scoresMutex);
+    
+            pthread_exit(NULL);
+        }
+
+        // If game is ended then collect all the scores and put them into the shared scoreboardList structure
+        // This client-dedicated thread adds its own score in the list
+        addPlayerScore(&scoresList, playerPointer->name, playerPointer->score);
+        printf("%s adds %d\n", playerPointer->name, playerPointer->score);
+
+        // The last thread updating its score player will notify the scorer thread
+        if (scoresList.size >= playersList->size) {
+            printf(MAGENTA("%s was the last, scores done\n"), playerPointer->name);
+            // Notifies the scorer thread saying the scores list is ready
+            isScoresListReady = 1;
+            
+            // Now the scoresMutex gets unlocked again and the thread waits till the scoresList gets triggered by the scorer thread
+            pthread_cond_signal(&scoresListCond);
+        }
+
+        // Then it waits for the scorer thread to create the final csv results string
+        while(!isCSVResultsScoreboardReady) {
+            printf("%s is waiting for scorer thread to make ranks...\n", playerPointer->name);
+            pthread_cond_wait(&CSVResultsCond, &scoresMutex);
+        }
+        
+        // Prepare the response message to send to this specific client
+        printf(GREEN("Sending rank results to %s\n"), playerPointer->name);
+        Message responseMsg;
+        ALLOCATE_MEMORY(responseMsg.payload, 512, "Unable to allocate memory for scoreboard message");
+        responseMsg.type = MSG_PUNTI_FINALI;
+        strcpy(responseMsg.payload, csvResult);
+        responseMsg.size = strlen(responseMsg.payload);
+        sendMessageToClient(responseMsg, playerPointer->fd);
+
+        free(responseMsg.payload);
+
+        pthread_mutex_unlock(&scoresMutex);
     }
 
-    // If game is ended then collect all the scores and put them into the shared scoreboardList structure
-    addScorePlayer(scoresList, player->name, player->score);
+    printf(RED("Thread ended\n"));
 
-    // The last thread updating its score player will notify the scorer thread
-    if (scoresList->size == playersList->size) {
-        areScoresInPlayersListReady = 1;
-        isGameEnded = 0;
-    }
-
-    pthread_mutex_unlock(&list_mutex);
-
-    // Signal the scorerThread that final results are ready
-    pthread_mutex_lock(&list_mutex);
-    finalResultsReady = 1;
-    pthread_cond_signal(&list_cond);
-    pthread_mutex_unlock(&list_mutex);
-
-    return NULL;
+    // Free the memory associated with the player
+    free(playerPointer->words);
+    free(playerPointer);
+    
+    pthread_exit(NULL);
 }
 
 void* handleClient(void* player) {
@@ -193,6 +278,12 @@ void* handleClient(void* player) {
 
     char* buffer = (char*)malloc(1024);
     int valread;
+
+    // Updating connected clients counter
+    pthread_mutex_lock(&scoresMutex);
+    connectedClients++;
+    printf(YELLOW("%d CLIENTS\n"), connectedClients);
+    pthread_mutex_unlock(&scoresMutex);
 
     // Read incoming message from client
     while ((valread = read(playerPointer->fd, buffer, 1024)) > 0) {
@@ -202,6 +293,9 @@ void* handleClient(void* player) {
         // Allocate memory for the response payload
         Message responseMsg;
         responseMsg.payload = (char*)malloc(1024);
+
+        // pthread_mutex_lock(&playersMutex);
+        pthread_mutex_lock(&scoresMutex);
 
         switch (msg.type) {
             case MSG_REGISTRA_UTENTE:
@@ -223,13 +317,16 @@ void* handleClient(void* player) {
                     sendMessageToClient(responseMsg, playerPointer->fd);
 
                     free(responseMsg.payload);
-                } else {
+                } else {    
                     // Adding player to players list
                     responseMsg.type = MSG_OK;
                     strcpy(responseMsg.payload, "Game joined\n");
                     responseMsg.size = strlen(responseMsg.payload);
                     sendMessageToClient(responseMsg, playerPointer->fd);
-                    addPlayer(playersList, playerPointer->fd, pthread_self(), msg.payload, 0);
+                    // Player* newPlayer = 
+                    playerPointer->tid = pthread_self();
+                    strcpy(playerPointer->name, msg.payload);
+                    addPlayer(playersList, playerPointer);
 
                     // Sending the game matrix if the game is running
                     if (currentState == GAME_STATE) {
@@ -247,6 +344,11 @@ void* handleClient(void* player) {
                     responseMsg.payload = strdup(timeLeftString);
                     responseMsg.size = strlen(responseMsg.payload);
                     sendMessageToClient(responseMsg, playerPointer->fd);
+
+                    // Creating a new thread to handle the scores collection system and sending the csv scoreboard
+                    // This new player-specific thread is created just for registered players
+                    // So that only the client playing the game will be in the scoreboard
+                    pthread_create(&playerPointer->scorerTid, NULL, scoresHandler, (void *)playerPointer);
 
                     free(responseMsg.payload);
                 }
@@ -276,7 +378,6 @@ void* handleClient(void* player) {
                 responseMsg.type = currentState == GAME_STATE ? MSG_TEMPO_PARTITA : MSG_TEMPO_ATTESA;
                 char timeLeftString[10];
                 sprintf(timeLeftString, "%d\n", getRemainingTime());
-                // strcpy(responseMsg.payload, timeLeftString);
                 responseMsg.payload = strdup(timeLeftString);
                 responseMsg.size = strlen(responseMsg.payload);
 
@@ -288,7 +389,11 @@ void* handleClient(void* player) {
             case MSG_PAROLA:
                 // Lower-casing given word for future comparisons
                 toLowercase(msg.payload);
-                printf("TO LOWERCASE: %s\n", msg.payload);
+
+                // Replacing "Qu" with 'q' so that both the functions used to search the word in the matrix or in the trie don't have to
+                replaceQu(msg.payload);
+
+                printf("EDITED WORD: %s\n", msg.payload);
 
                 // Deciding what to response to client
                 if (!isPlayerAlreadyRegistered(playersList, playerPointer->fd)) {
@@ -314,7 +419,7 @@ void* handleClient(void* player) {
                     int updatedScore = getPlayerScore(playersList, playerPointer->fd) + earnedPoints;
                     updatePlayerScore(playersList, playerPointer->fd, updatedScore);
 
-                    // Updating player list of words
+                    // Updating player list of sent words
                     addWordToPlayer(playersList, playerPointer->fd, msg.payload);
 
                     // Sending how much points the given word was as string
@@ -335,20 +440,45 @@ void* handleClient(void* player) {
             default:
                 break;
         }
+
+        // pthread_mutex_unlock(&playersMutex);
+        pthread_mutex_unlock(&scoresMutex);
     }
 
-    printf("Client %s disconnected\n", playerPointer->name);
-    removePlayer(playersList, playerPointer->fd);
+    printf(RED("Client %s disconnected\n"), playerPointer->name);
+
+    // I choosed to don't pthread_delete the scoresHandler thread directly here
+    // In general, we don't really want to violently kill a thread, but instead we want to ask it to terminate
+    // That way we can be sure that the child is quitting at a safe spot and all its resources are cleaned up
+    // In this case, we let it alive, so that it will exit by itself as soon as it realizes the player has quitted
+    // pthread_mutex_lock(&playersMutex);
+    pthread_mutex_lock(&scoresMutex);
+    removePlayer(playersList, playerPointer);
+    connectedClients--;
+    printf(YELLOW("%d CLIENTS\n"), connectedClients);
+    // pthread_mutex_unlock(&playersMutex);
+    pthread_mutex_unlock(&scoresMutex);
+
+    // Printing players list after disconnection
     printPlayerList(playersList);
+
+    // The player fd must be closed so that the server won't try to communicate with this client in the future
     close(playerPointer->fd);
 
-    // Cleanup thread resources
+    // Exit
     pthread_exit(NULL);
 }
 
-void server(char* serverName, int serverPort, char* matrixFilename, int gameDuration, unsigned int rndSeed, char *newDictionaryFile) {
+void server(char* serverName, int serverPort, char* passedMatrixFileName, int gameDuration, unsigned int rndSeed, char *newDictionaryFile) {
     playersList = createPlayerList();
-    int serverFd, retValue, newClientFd;
+
+    isGameEnded = 0;
+    isScoresListReady = 0;
+    isCSVResultsScoreboardReady = 0;
+    
+    connectedClients = 0;
+    
+    int retValue, newClientFd;
     struct sockaddr_in serverAddress, clientAddress;
     socklen_t clientAddressLength;
     srand(rndSeed);
@@ -364,18 +494,24 @@ void server(char* serverName, int serverPort, char* matrixFilename, int gameDura
     SYSC(retValue, listen(serverFd, MAX_CLIENTS), "Unable to start listen");
 
     // Filling matrix up
-    matrixFilename ? createNextMatrixFromFile(matrix, matrixFilename) : initRandomMatrix(matrix);
-    printf("Ready to listen.\nGenerated matrix:\n");
-    printMatrix(matrix);
+    if (passedMatrixFileName) {
+        matrixFileName = (char*)malloc(strlen(passedMatrixFileName) + 1);
+        strcpy(matrixFileName, passedMatrixFileName);
+    }
 
-    // Loading dictionary TODO: Do it using another thread, it might take time
+    // Loading dictionary
+    // It might take time, so a new thread could be used to load it
+    // But since we start the server at the WAITING_STATE, the function has plenty of time to be executed
     trieRoot = createNode();
-    loadDictionary(trieRoot, newDictionaryFile ? newDictionaryFile : "include/dictionary_ita.txt");
+    loadDictionary(trieRoot, newDictionaryFile ? newDictionaryFile : "../files/dictionary_ita.txt");
 
     // Setting up signal handler and initial alarm
     signal(SIGALRM, switchState);
     matchTime = gameDuration;
-    alarm(gameDuration);
+    alarm(10);
+
+    // Signal handler for SIGINT (Ctrl+C)
+    signal(SIGINT, handleSigint);
 
     // Let's start a new scorer thread which creates the csv ranking from the players list
     // This new thread will also tell all the client threads to communicate the csv ranking to each client
@@ -387,19 +523,34 @@ void server(char* serverName, int serverPort, char* matrixFilename, int gameDura
         // Accept incoming connection
         clientAddressLength = sizeof(clientAddress);
         SYSC(newClientFd, accept(serverFd, (struct sockaddr *)&clientAddress, &clientAddressLength), "Failed accepting a new client");
+        
+        pthread_mutex_lock(&scoresMutex);
+        if (connectedClients >= MAX_CLIENTS) {
+            Message responseMsg;
+            ALLOCATE_MEMORY(responseMsg.payload, 512, "Unable to allocate memory for scoreboard message");
+            responseMsg.type = MSG_ERR;
+            strcpy(responseMsg.payload, "Server is full\n");
+            responseMsg.size = strlen(responseMsg.payload);
+            sendMessageToClient(responseMsg, newClientFd);
+
+            free(responseMsg.payload);
+
+            // The player fd must be closed so that the server won't try to communicate with this client in the future
+            close(newClientFd);
+
+            printf(RED("Server is full, access denied\n"));
+
+            pthread_mutex_unlock(&scoresMutex);
+            continue;
+        }
+        pthread_mutex_unlock(&scoresMutex);
+
         printf("Client accepted, socket fd is %d\n", newClientFd);
 
-        Player* newPlayer;
-        ALLOCATE_MEMORY(newPlayer, sizeof(Player), "Failed to allocate memory for a new player struct");
-        newPlayer->fd = newClientFd;
+        // Initializing a new player
+        Player* newPlayer = createPlayer(newClientFd);
 
         // Creating a new thread to handle the client requestes and responses
         pthread_create(&newPlayer->tid, NULL, handleClient, (void *)newPlayer);
-
-        // Creating a new thread to handle the scores collection system and sending the csv scoreboard
-        pthread_create(&newPlayer->tid, NULL, scoresHandler, (void *)newPlayer);
     }
-
-    // Socket server closure
-    SYSC(retValue, close(serverFd), "Failed closing the socket");
 }

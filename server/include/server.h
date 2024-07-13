@@ -49,10 +49,12 @@ typedef enum {
     GAME_STATE
 } ServerState;
 
-void server(char* serverName, int serverPort, char* matrixFilename, int gameDuration, unsigned int rndSeed, char *newDictionaryFile);
+void server(char* serverName, int serverPort, char* passedMatrixFileName, int gameDuration, unsigned int rndSeed, char *newDictionaryFile);
 void* handleClient(void* player);
 Message parseMessage(char* buffer);
 int serializeMessage(const Message* msg, char* buffer);
 void sendMessageToClient(Message msg, int fd);
+void cleanup();
+void handleSigint();
 
 #endif /* SERVER_H */

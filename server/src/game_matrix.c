@@ -1,6 +1,6 @@
 #include "game_matrix.h"
 
-static char* letters = "ABCDEFGHILMNOP*RSTUVZ";
+static char* letters = "ABCDEFGHILMNOPQRSTUVZ";
 
 void initRandomMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]) {
     int i, j;
@@ -17,7 +17,7 @@ void initRandomMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]) {
 void createNextMatrixFromFile(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* fileName) {
     static FILE *file;
     static int currentLine = 0;
-
+ 
     file = fopen(fileName, "r");
     if (file == NULL) {
         perror("Error opening file");
@@ -63,6 +63,22 @@ void createNextMatrixFromFile(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* fileN
     }
 }
 
+void replaceQu(char* word) {
+    // Edge case: empty string or NULL pointer
+    if (word == NULL || *word == '\0') return;
+
+    int len = strlen(word);
+    for (int i = 0; i < len - 1; ++i) {
+        if (word[i] == 'q' && word[i + 1] == 'u') {
+            // Shift characters left to remove 'u'
+            for (int j = i + 1; j < len - 1; ++j) word[j] = word[j + 1];
+            word[len - 1] = '\0';  // Null-terminate the string
+            len--;  // Decrease length of string
+            i--;  // Check the current position again after shifting
+        }
+    }
+}
+
 int doesWordExistInMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* word) {
     int found = 0, i, j;
 
@@ -71,7 +87,7 @@ int doesWordExistInMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* word) {
     // Search for the source cells (first letter of the word)
     for (i = 0; i < MATRIX_SIZE; i++) {
         for (j = 0; j < MATRIX_SIZE; j++) {
-            if (TO_LOWERCASE(matrix[i][j].letter) == TO_LOWERCASE(word[0])) {
+            if (TO_LOWERCASE(matrix[i][j].letter) == word[0]) {
                 // Perform DFS to check for the word
                 isWordValid(matrix, &found, word, 0, i, j);
                 // Clean the matrix for next searches
@@ -100,7 +116,7 @@ void isWordValid(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], int* found, char* word, 
 
         // Avoid useless backtracking recursive calls
         if (nextRow >= 0 && nextRow < MATRIX_SIZE && nextCol >= 0 && nextCol < MATRIX_SIZE &&
-            TO_LOWERCASE(matrix[nextRow][nextCol].letter) == TO_LOWERCASE(word[currentWordIdx + 1]) && matrix[nextRow][nextCol].color == WHITE) {
+            TO_LOWERCASE(matrix[nextRow][nextCol].letter) == word[currentWordIdx + 1] && matrix[nextRow][nextCol].color == WHITE) {
             matrix[currentRow][currentCol].color = BLACK;
             isWordValid(matrix, found, word, currentWordIdx + 1, nextRow, nextCol);
         }
@@ -119,7 +135,9 @@ void printMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]) {
     int i, j;
     for (i = 0; i < MATRIX_SIZE; i++) {
         for (j = 0; j < MATRIX_SIZE; j++) {
-            printf("%c(%c) ", matrix[i][j].letter, matrix[i][j].color);
+            matrix[i][j].letter == 'Q' ? 
+                printf("Qu(%c) ", matrix[i][j].color) :
+                printf("%c(%c) ", matrix[i][j].letter, matrix[i][j].color);
         }
         printf("\n");
     }

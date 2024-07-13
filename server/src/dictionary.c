@@ -15,6 +15,16 @@ TrieNode* createNode(void) {
 // Function to insert a word into the Trie
 void insert(TrieNode *root, char *key) {
     TrieNode *crawler = root;
+
+    // for (int i = 0; key[i] != '\0'; ++i) {
+    //     if (key[i] >= 'A' && key[i] <= 'Z') key[i] = key[i] + ('a' - 'A');
+    // }
+
+    replaceQu(key);
+
+    if (key[0] == 'a' && key[1] == 'c' && key[2] == 'q') printf("%s\n", key);
+
+
     while (*key) {
         if (*key < 'a' || *key > 'z') {
             // printf("Skipping invalid character: %c\n", *key);

@@ -25,7 +25,7 @@ void printMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]) {
     int i, j;
     for (i = 0; i < MATRIX_SIZE; i++) {
         for (j = 0; j < MATRIX_SIZE; j++) {
-            printf("%c ", matrix[i][j].letter);
+            matrix[i][j].letter == 'Q' ? printf("Qu ") : printf("%c ", matrix[i][j].letter);
         }
         printf("\n");
     }

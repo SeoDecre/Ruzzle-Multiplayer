@@ -49,7 +49,7 @@ typedef struct {
     int* timeLeft;
     Cell (*matrix)[MATRIX_SIZE];
     pthread_mutex_t mutex;
-    pthread_cond_t cond;
+    volatile sig_atomic_t* connectionClosed;
 } ThreadParams;
 
 int serializeMessage(const Message* msg, char** buffer);

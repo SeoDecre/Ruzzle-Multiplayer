@@ -76,7 +76,7 @@ void printConfig(char *serverName, int serverPort, char *matrixFilename, int gam
 
     printf("Game duration: %d seconds\n", gameDuration);
     printf("Random seed: %u\n", rndSeed);
-    newDictionaryFile ? printf("New dictionary file: %s\n", newDictionaryFile) :printf("New dictionary file: not provided, using default newDictionaryFile\n");
+    newDictionaryFile ? printf("New dictionary file: %s\n", newDictionaryFile) :printf("New dictionary file: not provided, using default dictionary_ita.txt\n");
 }
 
 int main(int argc, char *argv[]) {

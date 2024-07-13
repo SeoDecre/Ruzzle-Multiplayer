@@ -41,7 +41,7 @@ void processCommand(const char* command, const char* content, ThreadParams* para
         } else if (strcmp(command, "p") == 0) {
             msg.type = MSG_PAROLA;
         } else {
-            strcpy(params->shellInfoMessage, "Comando non riconosciuto. Digita 'aiuto' per vedere i comandi disponibili.\n");
+            strcpy(params->shellInfoMessage, "Comando non riconosciuto. Digita 'aiuto' per vedere i comandi disponibili.");
             displayGameShell(params);
             return;
         }
@@ -77,7 +77,6 @@ void sendMessage(void* arg) {
 
     // Parse client input
     if (sscanf(params->clientInput, "%31s%*c%31[^\n]", command, content) < 1) {
-        fprintf(stderr, "Failed to parse client input\n");
         free(command);
         free(content);
         return;
@@ -118,31 +117,38 @@ void displayGameShell(ThreadParams* params) {
 }
 
 void parseAndMemorizeScoreboard(char* finalScoreboard, char* msgPayload) {
-    char* line;
-    char* playerName;
-    char* scoreStr;
-    char* rest = msgPayload;
-    int position = 1;
+    // Initialize variables
+    char* token;
+    int rank = 1;
+    
+    // Start parsing the msgPayload
+    token = strtok(msgPayload, ",");
 
-    // Initialize the output string
-    strcpy(finalScoreboard, "FINAL SCOREBOARD\n");
-
-    // Tokenize input by lines
-    while ((line = strtok_r(rest, "\n", &rest))) {
-        playerName = strtok(line, ",");
-        scoreStr = strtok(NULL, ",");
-
-        if (playerName != NULL && scoreStr != NULL) {
-            int score = atoi(scoreStr);
-
-            // Append formatted line to finalScoreboard
-            char playerScoreLine[16];
-            snprintf(playerScoreLine, sizeof(playerScoreLine), position == 1 ? YELLOW("%d° %s - %d\x1b[0m\n") : CYAN("%d° %s - %d\x1b[0m\n"), position, playerName, score);
-            strcat(finalScoreboard, playerScoreLine);
-
-            // Increment position
-            position++;
-        }
+    strcpy(finalScoreboard, RED("FINAL SCOREBOARD\n"));
+    
+    // Loop through the tokens
+    while (token != NULL) {
+        // Get the name
+        char name[50];
+        strcpy(name, token);
+        
+        // Get the next token for the score
+        token = strtok(NULL, ",");
+        if (token == NULL) break; // Check to avoid segmentation fault
+        
+        // Get the score
+        int score = atoi(token);
+        
+        // Format and append to finalScoreboard
+        char formattedLine[100];
+        snprintf(formattedLine, sizeof(formattedLine), "%d° %s - score: %d\n", rank, name, score);
+        strcat(finalScoreboard, formattedLine);
+        
+        // Increment the rank
+        rank++;
+        
+        // Get the next name
+        token = strtok(NULL, ",");
     }
 }
 
@@ -168,7 +174,6 @@ void processReceivedMessage(Message* msg, ThreadParams* params) {
         case MSG_PUNTI_FINALI:
             initMatrix(params->matrix);
             parseAndMemorizeScoreboard(params->finalScoreboard, msg->payload);
-            // strcpy(params->shellInfoMessage, msg->payload);
             break;
         default: // MSG_OK and MSG_ERR
             strcpy(params->shellInfoMessage, msg->payload);
@@ -182,7 +187,7 @@ void* handleReceivedMessage(void* arg) {
     
     while (1) {
         // Reading server response through file descriptor
-        SYSC(retValue, read(params->clientFd, params->serverResponse, MAX_SERVICE_RETURN_MSG_SIZE), "nella read"); // Lettura sul fd client
+        SYSC(retValue, read(params->clientFd, params->serverResponse, MAX_SERVICE_RETURN_MSG_SIZE), "nella read");
 
         // Parsing obtained buffer
         Message msg = parseMessage(params->serverResponse); // Also prints its content
@@ -193,6 +198,11 @@ void* handleReceivedMessage(void* arg) {
         
         free(msg.payload);
         displayGameShell(params);
+
+        if (retValue <= 0) {
+            *params->connectionClosed = 1;
+            return NULL;
+        }
     }
     
     return NULL;
@@ -202,6 +212,7 @@ void client(char* serverName, int port) {
     struct sockaddr_in serverAddr;
     int clientFd, retValue, score = 0, timeLeft = 0;
     pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+    volatile sig_atomic_t connectionClosed = 0;
 
     // Variable used to store the matrix
     Cell matrix[MATRIX_SIZE][MATRIX_SIZE];
@@ -255,21 +266,35 @@ void client(char* serverName, int port) {
         .matrix = matrix,
         .score = &score,
         .timeLeft = &timeLeft,
-        .mutex = mutex
+        .mutex = mutex,
+        .connectionClosed = &connectionClosed
     };
 
     // Create thread for receiving messages from server
     // The passed function creates a loop to continuously read from the server fd through the socket
     pthread_t receiverTid;
-    pthread_create(&receiverTid, NULL, handleReceivedMessage, (void *)&params);
+    if (pthread_create(&receiverTid, NULL, handleReceivedMessage, (void *)&params) != 0) {
+        perror("Thread creation failed");
+        free(clientInput);
+        free(serverResponse);
+        free(shellInfoMessage);
+        free(finalScoreboard);
+        close(clientFd);
+        exit(EXIT_FAILURE);
+    }
 
     // Displaying game shell (will be updated accordingly to server responses)
     displayGameShell(&params);
 
     // Main loop
-    while (1) {
+    while (!connectionClosed) {
         // Read user input
-        if (scanf("%63[^\n]%*c", clientInput) != 1) continue;
+        // I'm using fgets instead of scanf because of how scanf handles the input
+        // When the scanf receives only the "Enter" key it does not read any input and leaves the newline character in the input buffer, making the loop not behave as expected
+        if (fgets(clientInput, 64, stdin) == NULL) continue;
+
+        // Remove the newline character if present
+        clientInput[strcspn(clientInput, "\n")] = '\0';
 
         // Exit if user wants to end the session
         if (strcmp(clientInput, "fine") == 0) break;
@@ -283,12 +308,15 @@ void client(char* serverName, int port) {
     pthread_join(receiverTid, NULL);
     pthread_mutex_destroy(&mutex);
 
+    strcpy(shellInfoMessage, "Server terminated\n");
+    displayGameShell(&params);
+
     // Freeing memory
     free(clientInput);
     free(serverResponse);
     free(shellInfoMessage);
+    free(finalScoreboard);
 
     // Socket closure
     SYSC(retValue, close(clientFd), "nella close");
-    printf("PROGRAM ENDED\n");
 }
