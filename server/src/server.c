@@ -3,8 +3,8 @@
 int serverFd;
 volatile ServerState currentState = WAITING_STATE;
 
-// pthread_mutex_t playersMutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t scoresMutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t loadRestOfDictionaryMutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t gameEndedCond = PTHREAD_COND_INITIALIZER;
 pthread_cond_t scoresListCond = PTHREAD_COND_INITIALIZER;
 pthread_cond_t CSVResultsCond = PTHREAD_COND_INITIALIZER;
@@ -13,10 +13,12 @@ PlayerList* playersList;
 ScoresList scoresList;
 Cell matrix[MATRIX_SIZE][MATRIX_SIZE];
 TrieNode* trieRoot;
+int isRestOfDictionaryAlreadyBeenLoaded;
 int connectedClients;
 int matchTime;
 char* csvResult;
 char* matrixFileName;
+char* dictionaryFileName;
 
 int isGameEnded;
 int isScoresListReady;
@@ -24,8 +26,7 @@ int isCSVResultsScoreboardReady;
 
 void cleanup() {
     // Socket server closure
-    int retValue;
-    SYSC(retValue, close(serverFd), "Failed closing the server socket");
+    CHECK_NEGATIVE(close(serverFd), "Failed closing the server socket");
 
     // Removing all living threads
     for (int i = 0; i < playersList->size; i++) removePlayer(playersList, playersList->players[i]);
@@ -40,8 +41,10 @@ void cleanup() {
     // Cleaning resources
     destroyScoresList(&scoresList);
     freePlayerList(playersList);
-    if (csvResult) free(csvResult);
+    freeTrie(trieRoot);
+    free(dictionaryFileName);
     if (matrixFileName) free(matrixFileName);
+    if (csvResult) free(csvResult);
 
     printf(RED("SERVER ENDED\n"));
 }
@@ -49,15 +52,6 @@ void cleanup() {
 void handleSigint() {
     cleanup();
     exit(0);
-}
-
-void toLowercase(char *str) {
-    if (str == NULL) return;
-
-    while (*str != '\0') {
-        if (*str >= 'A' && *str <= 'Z') *str = *str + ('a' - 'A');
-        str++;
-    }
 }
 
 void switchState() {
@@ -71,9 +65,8 @@ void switchState() {
         isCSVResultsScoreboardReady = 0;
 
         // Preparing new matrix for next game
-        printf("FILE NAME: %s\n", matrixFileName);
-        matrixFileName ? createNextMatrixFromFile(matrix, matrixFileName) : initRandomMatrix(matrix);
-        printf("Generated matrix:\n");
+        matrixFileName ?  createNextMatrixFromFile(matrix, matrixFileName) : initRandomMatrix(matrix);
+        printf("New matrix:\n");
         printMatrix(matrix);
     } else {
         currentState = WAITING_STATE;
@@ -83,9 +76,9 @@ void switchState() {
         // We don't care if the playersList is empty, the scoresList will be initialized anyway
         // The scoresList memory allocation increases dynamically, adapting to possible registration in the meanwhile
         initializeScoresList(&scoresList);
-
+        
         // Triggering the sendFinalResults threads
-        // Even though there might not be registered players, we trigger the gameEndedCond so that aventual zombie scoresHandler threads can be canceled
+        // Even though there might not be registered players, we trigger the gameEndedCond so that aventual zombie playerScoreCollectorThread threads can be canceled
         isGameEnded = 1;
         pthread_cond_broadcast(&gameEndedCond);
     }
@@ -100,54 +93,29 @@ unsigned int getRemainingTime() {
     return remainingTime;
 }
 
-int serializeMessage(const Message* msg, char* buffer) {
-    int totalSize = sizeof(char) + sizeof(int) + msg->size;
-
-    // Copy 'type' field into the buffer
-    buffer[0] = msg->type;
-
-    // Copy 'size' field into the buffer
-    memcpy(buffer + sizeof(char), &(msg->size), sizeof(int));
-
-    // Copy 'payload' into the buffer
-    memcpy(buffer + sizeof(char) + sizeof(int), msg->payload, msg->size);
-
-    // Return the total size of the serialized message
-    return totalSize;
-}
-
-Message parseMessage(char* buffer) {
-    // Message structure
-    Message msg;
-
+void parseMessage(char* buffer, Message* msg) {
     // Parsing of message type
-    msg.type = buffer[0];
+    msg->type = buffer[0];
 
     // Parsing of message size
-    memcpy(&msg.size, buffer + sizeof(char), sizeof(int));
+    memcpy(&msg->size, buffer + sizeof(char), sizeof(int));
 
     // Payload memory allocation and storing
-    msg.payload = (char*)malloc(msg.size);
-    if (msg.payload == NULL) {
-        perror("Failed to allocate memory for payload");
-        exit(EXIT_FAILURE);
-    }
-    memcpy(msg.payload, buffer + sizeof(char) + sizeof(int), msg.size);
-    msg.payload[msg.size] = '\0';
+    ALLOCATE_MEMORY(msg->payload, msg->size, "Unable to allocate memory for message payload\n");
+    memcpy(msg->payload, buffer + sizeof(char) + sizeof(int), msg->size);
+    msg->payload[msg->size] = '\0';
 
     // Printing parsed message
-    printf("%c %d %s\n", msg.type, msg.size, msg.payload);
+    printf("%c %d %s\n", msg->type, msg->size, msg->payload);
     // for (int i = 0; i < msg.size; i++) printf("%02x ", (unsigned char)msg.payload[i]);
     // printf("\n\n");
-
-    return msg;
 }
 
-void sendMessageToClient(Message msg, int clientFd) {
-    int retValue;
+void sendMessageToClient(Message msg, int clientFd) {\
     // Allocating correct amount of bytes
+    char* buffer;
     int totalSize = sizeof(char) + sizeof(int) + msg.size;
-    char* buffer = (char*)malloc(totalSize);
+    ALLOCATE_MEMORY(buffer, totalSize, "Unable to allocate memory for response buffer\n");
 
     // Serializing msg into buffer
     buffer[0] = msg.type;
@@ -161,7 +129,10 @@ void sendMessageToClient(Message msg, int clientFd) {
     // printf("\n");
 
     // Send the serialized message to the server
-    SYSC(retValue, write(clientFd, buffer, totalSize), "nella write");
+    CHECK_NEGATIVE(write(clientFd, buffer, totalSize), "nella write");
+
+    // Freeing temporary buffer
+    free(buffer);
 }
 
 void* scorerThread() {
@@ -185,6 +156,10 @@ void* scorerThread() {
         if (csvResult) free(csvResult); // Cleaning from past uses
         csvResult = createCsvRanks(&scoresList);
 
+        // Resetting playersList scores and words list for next round
+        for (int i = 0; i < playersList->size; i++) playersList->players[i]->score = 0;
+        cleanPlayersListOfWords(playersList);
+
         // Unlock the mutex after accessing scoresList
         pthread_mutex_unlock(&scoresMutex);
 
@@ -198,17 +173,31 @@ void* scorerThread() {
     return NULL;
 }
 
-void* scoresHandler(void* player) {
+void setResponseMsg(Message* responseMsg, char type, char* payload) {
+    responseMsg->type = type;
+    responseMsg->size = strlen(payload);
+    strcpy(responseMsg->payload, payload);
+}
+
+void toLowercase(char *str) {
+    if (str == NULL) return;
+
+    while (*str != '\0') {
+        if (*str >= 'A' && *str <= 'Z') *str = *str + ('a' - 'A');
+        str++;
+    }
+}
+
+void* playerScoreCollectorThread(void* player) {
     Player* playerPointer = (Player *)player;
     printf("PLAYER: %s - %d - score %d\n", playerPointer->name, playerPointer->fd, playerPointer->score);
 
-    // We don't have to worry accessing playerPointer without calling the playersMutex because the handleClient threads use the scoresMutex to prevent race conditions
+    // The clientCommunicationThread threads use the scoresMutex to prevent race conditions accessing the playerPointer
     while (1) {
         pthread_mutex_lock(&scoresMutex);
         
         while (!isGameEnded) {
-            printf("%s is waiting for game to end...\n", playerPointer->name);
-
+            // printf("%s is waiting for game to end...\n", playerPointer->name);
             // Now the scoresMutex gets unlocked and the thread waits till the gameEndedCond gets triggered by the main thread
             pthread_cond_wait(&gameEndedCond, &scoresMutex);
         }
@@ -217,7 +206,7 @@ void* scoresHandler(void* player) {
 
         // Since this thread could be alive even though the related player has quitted, we check if that's the case and use this safe spot to clean the resources up
         if (playerPointer->fd < 0) {
-            printf(RED("%s has quitted previously, scoresHandler thread ended\n"), playerPointer->name);
+            printf(RED("%s has quitted previously, playerScoreCollectorThread ended\n"), playerPointer->name);
     
             // Free the memory associated with the player
             free(playerPointer->words);
@@ -232,7 +221,7 @@ void* scoresHandler(void* player) {
         // If game is ended then collect all the scores and put them into the shared scoreboardList structure
         // This client-dedicated thread adds its own score in the list
         addPlayerScore(&scoresList, playerPointer->name, playerPointer->score);
-        printf("%s adds %d\n", playerPointer->name, playerPointer->score);
+        printf("%s adds %d to the scores list\n", playerPointer->name, playerPointer->score);
 
         // The last thread updating its score player will notify the scorer thread
         if (scoresList.size >= playersList->size) {
@@ -246,17 +235,15 @@ void* scoresHandler(void* player) {
 
         // Then it waits for the scorer thread to create the final csv results string
         while(!isCSVResultsScoreboardReady) {
-            printf("%s is waiting for scorer thread to make ranks...\n", playerPointer->name);
+            // printf("%s is waiting for scorer thread to make ranks...\n", playerPointer->name);
             pthread_cond_wait(&CSVResultsCond, &scoresMutex);
         }
         
         // Prepare the response message to send to this specific client
         printf(GREEN("Sending rank results to %s\n"), playerPointer->name);
         Message responseMsg;
-        ALLOCATE_MEMORY(responseMsg.payload, 512, "Unable to allocate memory for scoreboard message");
-        responseMsg.type = MSG_PUNTI_FINALI;
-        strcpy(responseMsg.payload, csvResult);
-        responseMsg.size = strlen(responseMsg.payload);
+        ALLOCATE_MEMORY(responseMsg.payload, MAX_RANKS_BUFFER_BYTES, "Unable to allocate memory for scoreboard message");
+        setResponseMsg(&responseMsg, MSG_PUNTI_FINALI, csvResult);
         sendMessageToClient(responseMsg, playerPointer->fd);
 
         free(responseMsg.payload);
@@ -273,11 +260,11 @@ void* scoresHandler(void* player) {
     pthread_exit(NULL);
 }
 
-void* handleClient(void* player) {
+void* clientCommunicationThread(void* player) {
     Player* playerPointer = (Player *)player;
-
-    char* buffer = (char*)malloc(1024);
     int valread;
+    char* buffer;
+    ALLOCATE_MEMORY(buffer, MAX_BUFFER_BYTES, "Unable to allocate memory for requests buffer\n");
 
     // Updating connected clients counter
     pthread_mutex_lock(&scoresMutex);
@@ -286,47 +273,35 @@ void* handleClient(void* player) {
     pthread_mutex_unlock(&scoresMutex);
 
     // Read incoming message from client
-    while ((valread = read(playerPointer->fd, buffer, 1024)) > 0) {
-        // printf("BUFFER size %d %d, %s\n", strlen(buffer), valread, buffer);
+    while ((valread = read(playerPointer->fd, buffer, MAX_BUFFER_BYTES)) > 0) {
         printf("From client %d: ", playerPointer->fd);
-        Message msg = parseMessage(buffer); // Also prints the parsed buffer content
+        Message clientRequestMsg;
+        parseMessage(buffer, &clientRequestMsg); // Also prints the parsed buffer content
+
         // Allocate memory for the response payload
         Message responseMsg;
-        responseMsg.payload = (char*)malloc(1024);
+        ALLOCATE_MEMORY(responseMsg.payload, MAX_BUFFER_BYTES, "Unable to allocate memory for response payload\n");
 
-        // pthread_mutex_lock(&playersMutex);
         pthread_mutex_lock(&scoresMutex);
 
-        switch (msg.type) {
+        switch (clientRequestMsg.type) {
             case MSG_REGISTRA_UTENTE:
                 if (isPlayerAlreadyRegistered(playersList, playerPointer->fd)) {
-                    responseMsg.type = MSG_ERR;
-                    strcpy(responseMsg.payload, "Already registered\n");
-                
-                    // Sending response to client
-                    responseMsg.size = strlen(responseMsg.payload);
+                    setResponseMsg(&responseMsg, MSG_ERR, "Already registered");
                     sendMessageToClient(responseMsg, playerPointer->fd);
-
                     free(responseMsg.payload);
-                } else if (nicknameAlreadyExists(playersList, msg.payload)) {
-                    responseMsg.type = MSG_ERR;
-                    strcpy(responseMsg.payload, "Nickname invalid\n");
-                    
-                    // Sending response to client
-                    responseMsg.size = strlen(responseMsg.payload);
+                } else if (!isNicknameValid(playersList, clientRequestMsg.payload)) {
+                    setResponseMsg(&responseMsg, MSG_ERR, "Invalid nickname");
                     sendMessageToClient(responseMsg, playerPointer->fd);
-
                     free(responseMsg.payload);
-                } else {    
+                } else {
                     // Adding player to players list
-                    responseMsg.type = MSG_OK;
-                    strcpy(responseMsg.payload, "Game joined\n");
-                    responseMsg.size = strlen(responseMsg.payload);
-                    sendMessageToClient(responseMsg, playerPointer->fd);
-                    // Player* newPlayer = 
                     playerPointer->tid = pthread_self();
-                    strcpy(playerPointer->name, msg.payload);
+                    strcpy(playerPointer->name, clientRequestMsg.payload);
                     addPlayer(playersList, playerPointer);
+
+                    setResponseMsg(&responseMsg, MSG_OK, "Game joined");
+                    sendMessageToClient(responseMsg, playerPointer->fd);
 
                     // Sending the game matrix if the game is running
                     if (currentState == GAME_STATE) {
@@ -348,7 +323,7 @@ void* handleClient(void* player) {
                     // Creating a new thread to handle the scores collection system and sending the csv scoreboard
                     // This new player-specific thread is created just for registered players
                     // So that only the client playing the game will be in the scoreboard
-                    pthread_create(&playerPointer->scorerTid, NULL, scoresHandler, (void *)playerPointer);
+                    pthread_create(&playerPointer->scorerTid, NULL, playerScoreCollectorThread, (void *)playerPointer);
 
                     free(responseMsg.payload);
                 }
@@ -361,13 +336,12 @@ void* handleClient(void* player) {
                     if (isPlayerAlreadyRegistered(playersList, playerPointer->fd)) {
                         responseMsg.type = MSG_MATRICE;
                         memcpy(responseMsg.payload, matrix, sizeof(matrix));
+                        responseMsg.size = strlen(responseMsg.payload);
                     } else {
-                        responseMsg.type = MSG_ERR;
-                        strcpy(responseMsg.payload, "You're not registered yet\n");
+                        setResponseMsg(&responseMsg, MSG_ERR, "You're not registered yet");
                     }
 
                     // Sending response to client
-                    responseMsg.size = strlen(responseMsg.payload);
                     sendMessageToClient(responseMsg, playerPointer->fd);
 
                     free(responseMsg.payload);
@@ -388,51 +362,54 @@ void* handleClient(void* player) {
                 break;
             case MSG_PAROLA:
                 // Lower-casing given word for future comparisons
-                toLowercase(msg.payload);
+                toLowercase(clientRequestMsg.payload);
 
                 // Replacing "Qu" with 'q' so that both the functions used to search the word in the matrix or in the trie don't have to
-                replaceQu(msg.payload);
-
-                printf("EDITED WORD: %s\n", msg.payload);
+                replaceQu(clientRequestMsg.payload);
 
                 // Deciding what to response to client
                 if (!isPlayerAlreadyRegistered(playersList, playerPointer->fd)) {
-                    responseMsg.type = MSG_ERR;
-                    strcpy(responseMsg.payload, "You're not registered yet");
+                    setResponseMsg(&responseMsg, MSG_ERR, "You're not registered yet");
                 } else if (currentState == WAITING_STATE) {
-                    responseMsg.type = MSG_ERR;
-                    strcpy(responseMsg.payload, "Waiting for match to start");
-                } else if (!doesWordExistInMatrix(matrix, msg.payload) || !search(trieRoot, msg.payload)) {
-                    // If not present in the matrix or in the dictionary
-                    responseMsg.type = MSG_ERR;
-                    strcpy(responseMsg.payload, "Invalid word");
-                } else if (didUserAlreadyWroteWord(playersList, playerPointer->fd, msg.payload)) {
-                    responseMsg.type = MSG_PUNTI_PAROLA;
-                    strcpy(responseMsg.payload, "0\n");
+                    setResponseMsg(&responseMsg, MSG_ERR, "Waiting for match to start");
+                } else if (didUserAlreadyGuessedWord(playersList, playerPointer->fd, clientRequestMsg.payload)) {
+                    setResponseMsg(&responseMsg, MSG_PUNTI_PAROLA, "0\n");
+                } else if (doesWordExistInMatrix(matrix, clientRequestMsg.payload)) {
+                    // Loading words with more than average guessed word length from the dictionary
+                    pthread_mutex_lock(&loadRestOfDictionaryMutex);
+                    if (strlen(clientRequestMsg.payload) > AVERAGE_GUESS_WORD_LENGTH && !isRestOfDictionaryAlreadyBeenLoaded) {
+                        loadRestOfDictionary(trieRoot, dictionaryFileName);
+                        isRestOfDictionaryAlreadyBeenLoaded = 1;
+                    }
+                    pthread_mutex_unlock(&loadRestOfDictionaryMutex);
+
+                    // Now we can check if the word is actually present in the dictionary
+                    if (search(trieRoot, clientRequestMsg.payload)) {
+                        int earnedPoints = strlen(clientRequestMsg.payload);
+                        printf(GREEN("Word %s exists, +%d\n"), clientRequestMsg.payload, (int)strlen(clientRequestMsg.payload));
+
+                        // Updating Player score and list of guessed words
+                        int updatedScore = getPlayerScore(playersList, playerPointer->fd) + earnedPoints;
+                        updatePlayerScore(playersList, playerPointer->fd, updatedScore);
+                        addWordToPlayer(playersList, playerPointer->fd, clientRequestMsg.payload);
+
+                        // Sending how much points the given word was as string
+                        char pointsString[2];
+                        sprintf(pointsString, "%d", earnedPoints);
+                        strcpy(responseMsg.payload, pointsString);
+
+                        // Printing players list to see updated score
+                        printPlayerList(playersList);
+
+                        setResponseMsg(&responseMsg, MSG_PUNTI_PAROLA, pointsString);
+                    } else {
+                        setResponseMsg(&responseMsg, MSG_ERR, "Invalid word");
+                    }
                 } else {
-                    responseMsg.type = MSG_PUNTI_PAROLA;
-
-                    int earnedPoints = strlen(msg.payload);
-                    printf(GREEN("Word %s exists, +%d\n"), msg.payload, (int)strlen(msg.payload));
-
-                    // Updating Player score
-                    int updatedScore = getPlayerScore(playersList, playerPointer->fd) + earnedPoints;
-                    updatePlayerScore(playersList, playerPointer->fd, updatedScore);
-
-                    // Updating player list of sent words
-                    addWordToPlayer(playersList, playerPointer->fd, msg.payload);
-
-                    // Sending how much points the given word was as string
-                    char pointsString[2];
-                    sprintf(pointsString, "%d", earnedPoints);
-                    strcpy(responseMsg.payload, pointsString);
-
-                    // Printing players list to see updated score
-                    printPlayerList(playersList);
+                    setResponseMsg(&responseMsg, MSG_ERR, "Invalid word");
                 }
 
                 // Sending response to client
-                responseMsg.size = strlen(responseMsg.payload);
                 sendMessageToClient(responseMsg, playerPointer->fd);
 
                 free(responseMsg.payload);
@@ -441,29 +418,28 @@ void* handleClient(void* player) {
                 break;
         }
 
-        // pthread_mutex_unlock(&playersMutex);
+        free(clientRequestMsg.payload);
+
         pthread_mutex_unlock(&scoresMutex);
     }
 
     printf(RED("Client %s disconnected\n"), playerPointer->name);
 
-    // I choosed to don't pthread_delete the scoresHandler thread directly here
+    // I choosed to don't pthread_delete the playerScoreCollectorThread thread directly here
     // In general, we don't really want to violently kill a thread, but instead we want to ask it to terminate
     // That way we can be sure that the child is quitting at a safe spot and all its resources are cleaned up
     // In this case, we let it alive, so that it will exit by itself as soon as it realizes the player has quitted
-    // pthread_mutex_lock(&playersMutex);
     pthread_mutex_lock(&scoresMutex);
     removePlayer(playersList, playerPointer);
     connectedClients--;
     printf(YELLOW("%d CLIENTS\n"), connectedClients);
-    // pthread_mutex_unlock(&playersMutex);
     pthread_mutex_unlock(&scoresMutex);
 
     // Printing players list after disconnection
     printPlayerList(playersList);
 
     // The player fd must be closed so that the server won't try to communicate with this client in the future
-    close(playerPointer->fd);
+    if (playerPointer->fd != -1) close(playerPointer->fd);
 
     // Exit
     pthread_exit(NULL);
@@ -483,27 +459,30 @@ void server(char* serverName, int serverPort, char* passedMatrixFileName, int ga
     socklen_t clientAddressLength;
     srand(rndSeed);
 
-    // Inizializzazione della struttura serverAddress
+    // serverAddress structure initialization
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_port = htons(serverPort);
     CHECK_NEGATIVE(inet_pton(AF_INET, serverName, &serverAddress.sin_addr), "Invalid address");
 
-    // Creazione del socket, binding e listen
+    // Socket creation, binding and listen
     SYSC(serverFd, socket(AF_INET, SOCK_STREAM, 0), "Unable to create socket socket");
     SYSC(retValue, bind(serverFd, (struct sockaddr *) &serverAddress, sizeof(serverAddress)), "Enable to bind socket");
     SYSC(retValue, listen(serverFd, MAX_CLIENTS), "Unable to start listen");
 
-    // Filling matrix up
+    // Filling matrix up using a new matrix file name if passed, standard one if not
     if (passedMatrixFileName) {
-        matrixFileName = (char*)malloc(strlen(passedMatrixFileName) + 1);
+        ALLOCATE_MEMORY(matrixFileName, strlen(passedMatrixFileName) + 1, "Unable to allocate memory for matrix file name string\n");
         strcpy(matrixFileName, passedMatrixFileName);
     }
-
-    // Loading dictionary
-    // It might take time, so a new thread could be used to load it
-    // But since we start the server at the WAITING_STATE, the function has plenty of time to be executed
+    
+    // Loading dictionary using a new dictionary file name if passed, standard one if not
+    ALLOCATE_MEMORY(dictionaryFileName, newDictionaryFile ? strlen(newDictionaryFile) + 1 : strlen(STD_DICTIONARY_FILENAME) + 1, "Unable to allocate memory for dictionary file name string\n");
+    strcpy(dictionaryFileName, newDictionaryFile ? newDictionaryFile : STD_DICTIONARY_FILENAME);
+    
+    // Loading dictionary function doesn't take that much time to be executed, however, a new thread could be used to load it
+    // But since we start the server at the WAITING_STATE, the function has plenty of time to be executed before actually being used
     trieRoot = createNode();
-    loadDictionary(trieRoot, newDictionaryFile ? newDictionaryFile : "../files/dictionary_ita.txt");
+    loadFirstPartOfDictionary(trieRoot, dictionaryFileName);
 
     // Setting up signal handler and initial alarm
     signal(SIGALRM, switchState);
@@ -527,10 +506,8 @@ void server(char* serverName, int serverPort, char* passedMatrixFileName, int ga
         pthread_mutex_lock(&scoresMutex);
         if (connectedClients >= MAX_CLIENTS) {
             Message responseMsg;
-            ALLOCATE_MEMORY(responseMsg.payload, 512, "Unable to allocate memory for scoreboard message");
-            responseMsg.type = MSG_ERR;
-            strcpy(responseMsg.payload, "Server is full\n");
-            responseMsg.size = strlen(responseMsg.payload);
+            ALLOCATE_MEMORY(responseMsg.payload, 32, "Unable to allocate memory for scoreboard message");
+            setResponseMsg(&responseMsg, MSG_ERR, "Server is full");
             sendMessageToClient(responseMsg, newClientFd);
 
             free(responseMsg.payload);
@@ -551,6 +528,6 @@ void server(char* serverName, int serverPort, char* passedMatrixFileName, int ga
         Player* newPlayer = createPlayer(newClientFd);
 
         // Creating a new thread to handle the client requestes and responses
-        pthread_create(&newPlayer->tid, NULL, handleClient, (void *)newPlayer);
+        pthread_create(&newPlayer->tid, NULL, clientCommunicationThread, (void *)newPlayer);
     }
 }

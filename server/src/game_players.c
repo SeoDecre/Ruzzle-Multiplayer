@@ -1,7 +1,6 @@
 #include "game_players.h"
 #include "colors.h"
 
-// Function to initialize the ScoresList
 void initializeScoresList(ScoresList* list) {
     if (list->players != NULL) free(list->players);
 
@@ -9,10 +8,8 @@ void initializeScoresList(ScoresList* list) {
     list->size = 0;
 }
 
-// Function to add a PlayerScore to the ScoresList
 void addPlayerScore(ScoresList* list, char* nickname, int score) {
     if (list == NULL) return;
-
 
     // Allocate memory for the new player list
     PlayerScore* newPlayers = realloc(list->players, (list->size + 1) * sizeof(PlayerScore));
@@ -31,14 +28,12 @@ void addPlayerScore(ScoresList* list, char* nickname, int score) {
     list->size++;
 }
 
-// Comparison function for qsort
 int compareScores(const void* a, const void* b) {
     int scoreA = ((PlayerScore*)a)->score;
     int scoreB = ((PlayerScore*)b)->score;
     return scoreB - scoreA;
 }
 
-// Function to sort the ScoresList by scores in ascending order and return a CSV string
 char* createCsvRanks(ScoresList* list) {
     // Sort the list using qsort
     qsort(list->players, list->size, sizeof(PlayerScore), compareScores);
@@ -50,12 +45,9 @@ char* createCsvRanks(ScoresList* list) {
     }
 
     // Allocate memory for the CSV string
-    char* csv = (char*)malloc(csvLength);
-    if (csv == NULL) {
-        fprintf(stderr, "Failed to allocate memory for CSV\n");
-        return NULL;
-    }
-
+    char* csv;
+    ALLOCATE_MEMORY(csv, csvLength, "Failed to allocate memory for CSV\n");
+    
     // Build the CSV string
     csv[0] = '\0'; // Initialize as an empty string
     for (int i = 0; i < list->size; ++i) {
@@ -67,12 +59,12 @@ char* createCsvRanks(ScoresList* list) {
     return csv;
 }
 
-// Function to destroy the ScoresList
 void destroyScoresList(ScoresList* list) {
     free(list->players);
     list->players = NULL;
     list->size = 0;
 }
+
 
 Player* createPlayer(int fd) {
     // Allocate memory for a new Player
@@ -91,7 +83,6 @@ Player* createPlayer(int fd) {
     // Allocate memory for words array
     player->words = (char**)malloc(player->wordsCapacity * sizeof(char*));
     if (player->words == NULL) {
-        // Handle memory allocation failure
         perror("Failed to allocate memory for player's words array");
         free(player);
         return NULL;
@@ -101,15 +92,10 @@ Player* createPlayer(int fd) {
 }
 
 PlayerList* createPlayerList(void) {
-    PlayerList* list = malloc(sizeof(PlayerList));
-
-    if (list == NULL) {
-        perror("Failed to allocate memory for PlayerList");
-        exit(EXIT_FAILURE);
-    }
+    PlayerList* list;
+    ALLOCATE_MEMORY(list, sizeof(PlayerList), "Unable to allocate memory for players list");
 
     list->players = malloc(INITIAL_CAPACITY * sizeof(Player*));
-
     if (list->players == NULL) {
         perror("Failed to allocate memory for players array");
         free(list);
@@ -162,16 +148,10 @@ void removePlayer(PlayerList* list, Player* player) {
     // Not freeing the player allows the reference to still point to an existing piece of memory
     player->fd = -1;
     
-    // Free the memory associated with the player
-    // free(list->players[index]->words);
-    // free(player);
-
     // Shift the remaining players to fill the gap
     for (int i = index; i < list->size - 1; i++) {
         list->players[i] = list->players[i + 1];
     }
-
-    // if (player->name) printf(RED("DENTRO: %s\n"), player->name);
 
     // Decrease the size of the list
     list->size--;
@@ -202,19 +182,6 @@ int getPlayerScore(PlayerList* list, int playerFd) {
     return -1;
 }
 
-void updatePlayerNickname(PlayerList* list, int playerFd, char* newNickname) {
-    // Find the player with the given playerFd
-    for (int i = 0; i < list->size; i++) {
-        if (list->players[i]->fd == playerFd) {
-            // Update the player's nickname
-            strcpy(list->players[i]->name, newNickname);
-            return;
-        }
-    }
-
-    printf("Player with ID %d not found\n", playerFd);
-}
-
 int isPlayerAlreadyRegistered(PlayerList* list, int playerFd) {
 	for (int i = 0; i < list->size; i++) {
         if (list->players[i]->fd == playerFd) return 1;
@@ -222,20 +189,31 @@ int isPlayerAlreadyRegistered(PlayerList* list, int playerFd) {
     return 0;
 }
 
-int nicknameAlreadyExists(PlayerList* list, char* nickname) {
+int isNicknameValid(PlayerList* list, char* nickname) {
+    // Firstly check if nickname length is valid
+    if (strlen(nickname) > MAX_NICKNAME_LENGTH) return 0;
+
+    // Then check if 
     for (int i = 0; i < list->size; i++) {
-        if (strcmp(list->players[i]->name, nickname) == 0) return 1;
+        printf("Comparing: %s  =  %s\n", list->players[i]->name, nickname);
+        if (strcmp(list->players[i]->name, nickname) == 0) return 0;
     }
-    return 0;
+
+    // Then if content is valid (allowed letters and numbers only)
+    while (*nickname) {
+        char c = *nickname;
+        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'))) return 0;
+        nickname++;
+    }
+
+    return 1;
 }
 
-int didUserAlreadyWroteWord(PlayerList* list, int playerFd, char* word) {
+int didUserAlreadyGuessedWord(PlayerList* list, int playerFd, char* word) {
     for (int i = 0; i < list->size; i++) {
         if (list->players[i]->fd == playerFd) {
             for (int j = 0; j < list->players[i]->wordsCount; j++) {
-                if (strcmp(list->players[i]->words[j], word) == 0) {
-                    return 1;
-                }
+                if (strcmp(list->players[i]->words[j], word) == 0) return 1;
             }
             break;
         }
@@ -270,21 +248,15 @@ void addWordToPlayer(PlayerList* list, int playerFd, char* word) {
     fprintf(stderr, "Player with fd %d not found\n", playerFd);
 }
 
-int comparePlayers(const void *a, const void *b) {
-    Player *playerA = (Player *)a;
-    Player *playerB = (Player *)b;
-    return playerB->score - playerA->score; // Sort in descending order
-}
-
 void cleanPlayersListOfWords(PlayerList* list) {
     // Find the player with the specified playerFd
     for (int i = 0; i < list->size; i++) {
         if (list->players[i]->words) {
-            for (int i = 0; i < list->players[i]->wordsCount; ++i) free(list->players[i]->words[i]);
+            for (int j = 0; j < list->players[i]->wordsCount; ++j) free(list->players[i]->words[j]);
             free(list->players[i]->words);
             list->players[i]->wordsCount = 0;
             list->players[i]->wordsCapacity = 10; // Back to initial capacity
-            list->players[i]->words = (char**)malloc(list->players[i]->wordsCapacity * sizeof(char*));
+            ALLOCATE_MEMORY(list->players[i]->words, list->players[i]->wordsCapacity * sizeof(char*), "Unable to allocate memory for player list of words");
         }
     }
 }

@@ -15,14 +15,10 @@ void initRandomMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]) {
 }
 
 void createNextMatrixFromFile(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* fileName) {
+    // This variables are static so that they are preserved between each call
     static FILE *file;
     static int currentLine = 0;
- 
-    file = fopen(fileName, "r");
-    if (file == NULL) {
-        perror("Error opening file");
-        exit(EXIT_FAILURE);
-    }
+    FILE_OPEN(file, fileName, "r");
 
     char buffer[50]; // buffer to hold one line of the file
 
@@ -34,8 +30,6 @@ void createNextMatrixFromFile(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* fileN
             exit(EXIT_FAILURE);
         }
     }
-
-    printf("MATRIX BUFFER: %s\n", buffer);
 
     // Fill the matrix with characters from the current line
     char* token = strtok(buffer, " ");
@@ -79,10 +73,12 @@ void replaceQu(char* word) {
     }
 }
 
-int doesWordExistInMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* word) {
-    int found = 0, i, j;
+int doesWordExistInMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE], char* word) {    
+    // Additionally, we could add a condition to check if the word contains letters present in the matrix
+    // However, considering the matrix size will remain relatively small for this type of game, iterating through each letter of the word might be inefficient in most cases
+    if (strlen(word) < 4 || strlen(word) > (MATRIX_SIZE*MATRIX_SIZE)) return 0;
 
-    if (strlen(word) < 4 || strlen(word) > 16) return 0;
+    int found = 0, i, j;
 
     // Search for the source cells (first letter of the word)
     for (i = 0; i < MATRIX_SIZE; i++) {
@@ -136,8 +132,8 @@ void printMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]) {
     for (i = 0; i < MATRIX_SIZE; i++) {
         for (j = 0; j < MATRIX_SIZE; j++) {
             matrix[i][j].letter == 'Q' ? 
-                printf("Qu(%c) ", matrix[i][j].color) :
-                printf("%c(%c) ", matrix[i][j].letter, matrix[i][j].color);
+                printf(MAGENTA("Qu ")) :
+                printf(MAGENTA("%c "), matrix[i][j].letter);
         }
         printf("\n");
     }

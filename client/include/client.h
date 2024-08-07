@@ -32,6 +32,7 @@
 #define MSG_PUNTI_PAROLA 'P'
 #define MAX_SERVICE_RETURN_MSG_SIZE 256
 
+// Message struct client-server protocol
 typedef struct {
     char type;        // 1 byte
     int size;         // 4 byte
@@ -52,27 +53,35 @@ typedef struct {
     volatile sig_atomic_t* connectionClosed;
 } ThreadParams;
 
+// Serializes a Message struct element into a buffer, returning its total size
 int serializeMessage(const Message* msg, char** buffer);
 
-Message parseMessage(const char* buffer);
-
+// Processes the message the user wants to send to the server
+// Ensures that the message adheres to the correct format before sending it
 void processCommand(const char* command, const char* content, ThreadParams* params);
 
+// Sends a message to the server
 void sendMessage(void* arg);
 
+// Parses the scores CSV message received from the server and creates a nice-formatted scoreboard string
 void parseAndMemorizeScoreboard(char* finalScoreboard, char* msgPayload);
 
+// Displays game shell, showing all the game info
 void displayGameShell(ThreadParams* params);
 
+// Processes server response messages
+// Used by the "handleReceivedMessage" thread so that the code looks cleaner
 void processReceivedMessage(Message* msg, ThreadParams* params);
 
+// Parses the server buffer message into a Message struct element
+void parseServerMessage(Message* msg, const char* buffer);
+
+// Client thread message receiver function
+// Used to continuously listen to the server responses
 void* handleReceivedMessage(void* arg);
 
-/*
-Main client function
-Creates a new thread to continuously listen to the server
-Uses the main thread to create a shell-alike terminal for user prompts
-*/
+// Main client function
+// Uses the main thread to create a shell-alike terminal for user prompts
 void client(char* serverName, int port);
 
 #endif /* CLIENT_H */

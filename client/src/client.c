@@ -11,18 +11,6 @@ int serializeMessage(const Message* msg, char** buffer) {
     return totalSize;
 }
 
-Message parseMessage(const char* buffer) {
-    Message msg;
-    msg.type = buffer[0];
-    memcpy(&msg.size, buffer + sizeof(char), sizeof(int));
-
-    ALLOCATE_MEMORY(msg.payload, msg.size + 1, "Failed to allocate memory for payload");
-    memcpy(msg.payload, buffer + sizeof(char) + sizeof(int), msg.size);
-    msg.payload[msg.size] = '\0';
-
-    return msg;
-}
-
 void processCommand(const char* command, const char* content, ThreadParams* params) {
     Message msg;
     int retValue;
@@ -174,11 +162,21 @@ void processReceivedMessage(Message* msg, ThreadParams* params) {
         case MSG_PUNTI_FINALI:
             initMatrix(params->matrix);
             parseAndMemorizeScoreboard(params->finalScoreboard, msg->payload);
+            *params->score = 0;
             break;
         default: // MSG_OK and MSG_ERR
             strcpy(params->shellInfoMessage, msg->payload);
             break;
     }
+}
+
+void parseServerMessage(Message* msg, const char* buffer) {
+    msg->type = buffer[0];
+    memcpy(&msg->size, buffer + sizeof(char), sizeof(int));
+
+    ALLOCATE_MEMORY(msg->payload, msg->size + 1, "Failed to allocate memory for payload");
+    memcpy(msg->payload, buffer + sizeof(char) + sizeof(int), msg->size);
+    msg->payload[msg->size] = '\0';
 }
 
 void* handleReceivedMessage(void* arg) {
@@ -187,16 +185,17 @@ void* handleReceivedMessage(void* arg) {
     
     while (1) {
         // Reading server response through file descriptor
-        SYSC(retValue, read(params->clientFd, params->serverResponse, MAX_SERVICE_RETURN_MSG_SIZE), "nella read");
+        SYSC(retValue, read(params->clientFd, params->serverResponse, MAX_SERVICE_RETURN_MSG_SIZE), "Unable to read server message");
 
         // Parsing obtained buffer
-        Message msg = parseMessage(params->serverResponse); // Also prints its content
+        Message serverResponseMsg;
+        parseServerMessage(&serverResponseMsg, params->serverResponse); // Also prints its content
         
         pthread_mutex_lock(&(params->mutex));
-        processReceivedMessage(&msg, params);
+        processReceivedMessage(&serverResponseMsg, params);
         pthread_mutex_unlock(&(params->mutex));
         
-        free(msg.payload);
+        free(serverResponseMsg.payload);
         displayGameShell(params);
 
         if (retValue <= 0) {
@@ -244,10 +243,10 @@ void client(char* serverName, int port) {
     CHECK_NEGATIVE(inet_pton(AF_INET, serverName, &serverAddr.sin_addr), "Invalid address");
     
     // Socket creation
-    SYSC(clientFd, socket(AF_INET, SOCK_STREAM, 0), "nella socket");
+    SYSC(clientFd, socket(AF_INET, SOCK_STREAM, 0), "Unable to create the socket");
 
     // Trying connection with the server
-    SYSC(retValue, connect(clientFd, (struct sockaddr *)&serverAddr, sizeof(serverAddr)), "nella connect");
+    SYSC(retValue, connect(clientFd, (struct sockaddr *)&serverAddr, sizeof(serverAddr)), "Unable to connect to the server");
 
     // Storing a connection info message so that it will displayed in the shell
     strcpy(shellInfoMessage, GREEN("Connected to the server"));
@@ -318,5 +317,5 @@ void client(char* serverName, int port) {
     free(finalScoreboard);
 
     // Socket closure
-    SYSC(retValue, close(clientFd), "nella close");
+    SYSC(retValue, close(clientFd), "Unable to close the client connection");
 }

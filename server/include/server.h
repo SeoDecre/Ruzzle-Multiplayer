@@ -32,6 +32,15 @@
 #define MSG_PUNTI_FINALI 'F'
 #define MSG_PUNTI_PAROLA 'P'
 
+// 128 bytes are enough to store every kind of buffer message sent between client and server
+#define MAX_BUFFER_BYTES 128
+
+// 512 bytes are enough to store the entire scoreboard rankings string
+#define MAX_RANKS_BUFFER_BYTES 512
+
+#define STD_DICTIONARY_FILENAME "../files/dictionary_ita.txt"
+
+// Message struct client-server protocol
 typedef struct {
     char type;        // 1 byte
     int size;         // 4 byte
@@ -49,12 +58,46 @@ typedef enum {
     GAME_STATE
 } ServerState;
 
-void server(char* serverName, int serverPort, char* passedMatrixFileName, int gameDuration, unsigned int rndSeed, char *newDictionaryFile);
-void* handleClient(void* player);
-Message parseMessage(char* buffer);
-int serializeMessage(const Message* msg, char* buffer);
-void sendMessageToClient(Message msg, int fd);
+// Cleans up resources: freeing memory, closing connections and destroying mutexes
+// It's used from the handleSigint "CTRL-C detection" function
 void cleanup();
+
+// Detects the CTRL-C server closure detection
 void handleSigint();
+
+// Switches the global ServerState
+// It allows notify threads that the game has just ended or started
+void switchState();
+
+// Remaining time getter
+unsigned int getRemainingTime();
+
+// Main thread server function
+// Accepts new client connections by assigning a new clientCommunicationThread to them
+void server(char* serverName, int serverPort, char* passedMatrixFileName, int gameDuration, unsigned int rndSeed, char *newDictionaryFile);
+
+// Main client thread handler function
+// Listens to a specific client request and to respond to it
+void* clientCommunicationThread(void* player);
+
+// "Side" client thread scores handler function
+// A thread with this function is created just for registered clients
+// Detects when the game is ended, so that each player can send its score to the global scoresList list
+// and the final scoreboard ranks string to its client after the "scorerThread" thread has listed it
+void* playerScoreCollectorThread(void* player);
+
+// Thread function used to create a scoreboard ranks string as soon as each player has finished adding its score to the global scoresList list
+// It also notifies each "playerScoreCollectorThread" thread so that each one of them can send the final scoreboard to its client
+void* scorerThread();
+
+// Fills up a Message reference fields
+// It automatically sets the Message size field
+void setResponseMsg(Message* responseMsg, char type, char *payload);
+
+// Sends a string-buffered Message to a client using its fd
+void sendMessageToClient(Message msg, int fd);
+
+// Parses a string buffer received from a client into its equivalent Message struct element
+void parseMessage(char* buffer, Message* msg);
 
 #endif /* SERVER_H */

@@ -1,10 +1,11 @@
 #include "dictionary.h"
 
-// Function to create a new Trie node
 TrieNode* createNode(void) {
-    TrieNode *newNode = (TrieNode *)malloc(sizeof(TrieNode));
+    // TrieNode *newNode = (TrieNode *)malloc(sizeof(TrieNode));
+    TrieNode *newNode;
+    ALLOCATE_MEMORY(newNode, sizeof(TrieNode), "Unable to allocate memory for dictionary trie\n");
     if (newNode) {
-        newNode->isEndOfWord = false;
+        newNode->isEndOfWord = 0;
         for (int i = 0; i < ALPHABET_SIZE; i++) {
             newNode->children[i] = NULL;
         }
@@ -12,75 +13,88 @@ TrieNode* createNode(void) {
     return newNode;
 }
 
-// Function to insert a word into the Trie
 void insert(TrieNode *root, char *key) {
     TrieNode *crawler = root;
 
-    // for (int i = 0; key[i] != '\0'; ++i) {
-    //     if (key[i] >= 'A' && key[i] <= 'Z') key[i] = key[i] + ('a' - 'A');
-    // }
-
+    // Replacing Q with Qu because that's how words are stored in the trie
     replaceQu(key);
 
-    if (key[0] == 'a' && key[1] == 'c' && key[2] == 'q') printf("%s\n", key);
-
-
     while (*key) {
+        // Putting key to lowercase if necessary
+        // This condition sligthly slows down the loadDictionary function if the file is too big
+        // But it's not a big deal since the 
+        if (*key >= 'A' && *key <= 'Z') *key += ('a' - 'A');
+
+        // Skipping invalid characters
         if (*key < 'a' || *key > 'z') {
-            // printf("Skipping invalid character: %c\n", *key);
             key++;
             continue;
         }
+
         int index = *key - 'a';
         if (!crawler->children[index]) {
-            // printf("Creating node for character: %c\n", *key);
+            // Creating node for new character
             crawler->children[index] = createNode();
         }
         crawler = crawler->children[index];
         key++;
     }
-    // printf("Marking end of word: %s\n", key);
-    crawler->isEndOfWord = true;
+
+    // Marking end of word
+    crawler->isEndOfWord = 1;
 }
 
-// Function to search for a word in the Trie
-bool search(TrieNode *root, char *key) {
+int search(TrieNode *root, char *key) {
     TrieNode *crawler = root;
     while (*key) {
-        if (*key < 'a' || *key > 'z') {
-            printf("Invalid character in search: %c\n", *key);
-            return false;
-        }
+        // Invalid character in search
+        if (*key < 'a' || *key > 'z') return 0;
+
+        // Checking if current character exists in the structure
         int index = *key - 'a';
-        if (!crawler->children[index]) {
-            printf("Character not found: %c\n", *key);
-            return false;
-        }
+        if (!crawler->children[index]) return 0;
         crawler = crawler->children[index];
         key++;
     }
     return (crawler != NULL && crawler->isEndOfWord);
 }
 
-// Function to load dictionary from file into Trie
-void loadDictionary(TrieNode *root, char *filename) {
-    FILE *file = fopen(filename, "r");
-    if (!file) {
-        perror("Failed to open dictionary file");
-        return;
-    }
+void loadFirstPartOfDictionary(TrieNode *root, char *fileName) {
+    FILE *file;
+    FILE_OPEN(file, fileName, "r");
 
     char word[256];
     while (fgets(word, sizeof(word), file)) {
-        // Remove newline character
-        word[strcspn(word, "\n")] = 0;
-        insert(root, word);
+        // Insert word in the trie just if its length is below the average guessed word length
+        if (strlen(word) <= AVERAGE_GUESS_WORD_LENGTH) {
+            // Remove newline character
+            word[strcspn(word, "\n")] = 0;
+            insert(root, word);
+        }
     }
+
     printf("Dictionary loaded\n");
     fclose(file);
 }
 
-// Function to free the Trie memory
+void loadRestOfDictionary(TrieNode *root, char *fileName) {
+    FILE *file;
+    FILE_OPEN(file, fileName, "r");
+
+    char word[256];
+    while (fgets(word, sizeof(word), file)) {
+        // Insert all the words above the average length but below the possible maximum given the matrix size
+        if (strlen(word) > AVERAGE_GUESS_WORD_LENGTH && strlen(word) <= (MATRIX_SIZE*MATRIX_SIZE)) {
+            // Remove newline character
+            word[strcspn(word, "\n")] = 0;
+            insert(root, word);
+        }
+    }
+
+    printf("Dictionary loaded\n");
+    fclose(file);
+}
+
 void freeTrie(TrieNode *root) {
     if (!root) return;
     for (int i = 0; i < ALPHABET_SIZE; i++) {

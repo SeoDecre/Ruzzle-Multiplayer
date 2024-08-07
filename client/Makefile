@@ -17,7 +17,7 @@ SRC = $(SRC_DIR)/main.c $(SRC_DIR)/game_matrix.c $(SRC_DIR)/client.c
 OBJ = $(patsubst $(SRC_DIR)/%.c, $(BUILD_DIR)/%.o, $(SRC))
 
 # Executable
-EXEC = $(BIN_DIR)/main
+EXEC = $(BIN_DIR)/paroliere_cl
 
 # Libraries
 LIBS = -lpthread

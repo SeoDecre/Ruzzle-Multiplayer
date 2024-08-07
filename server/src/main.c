@@ -6,6 +6,7 @@
 #include "macros.h"
 #include "server.h"
 
+// ./paroliere_srv 127.0.0.1 3001 --matrici ../files/matrix.txt --durata 5 --seed 10
 #define DEFAULT_DURATION 180
 
 void usage(char *progName) {

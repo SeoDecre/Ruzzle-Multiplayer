@@ -11,14 +11,16 @@
 #define WHITE 'w'
 #define BLACK 'b'
 
+// Matrix cell struct
 typedef struct {
     char letter;
     char color; // 'w' for white, 'b' for black
 } Cell;
 
-// Function prototypes
+// Initializes an empty matrix
 void initMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]);
-void cleanMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]);
+
+// Prints the matrix
 void printMatrix(Cell matrix[MATRIX_SIZE][MATRIX_SIZE]);
 
 #endif /* GAME_H */
